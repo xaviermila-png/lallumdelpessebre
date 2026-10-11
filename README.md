@@ -9,6 +9,8 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
 |---|---|---|
 | [ARDMX/Manual_APP_ARDMX_CAT.pdf](ARDMX/Manual_APP_ARDMX_CAT.pdf) | Manual de l'APP ARDMX (català) | 3.0 |
 | [ARDMX/Manual_APP_ARDMX_CAST.pdf](ARDMX/Manual_APP_ARDMX_CAST.pdf) | Manual de la APP ARDMX (castellano) | 3.0 |
+| [ARDMX/Firmware_ARDMX_One.zip](ARDMX/Firmware_ARDMX_One.zip) | Instal·lador del firmware ARDMX One per a Windows (instruccions a LLEGEIX-ME.txt) | v2.2 |
+| [ARDMX/Firmware_ARDMX_EVO.zip](ARDMX/Firmware_ARDMX_EVO.zip) | Instal·lador del firmware ARDMX EVO per a Windows (instruccions a LLEGEIX-ME.txt) | v2.1 |
 
 ## Normes del repositori
 
@@ -17,3 +19,10 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
   no canviïn quan s'actualitzen. La versió vigent s'indica en aquest README.
 - Enllaç de descàrrega directa des de la web:
   `https://github.com/xaviermila-png/lallumdelpessebre/raw/refs/heads/main/<carpeta>/<fitxer>`
+
+## Origen dels fitxers
+
+- Els ZIP de firmware es generen a partir de la carpeta `installer_standalone/` de
+  [ardmx-one-firmware](https://github.com/xaviermila-png/ardmx-one-firmware) i
+  [ardmx-evo-firmware](https://github.com/xaviermila-png/ardmx-evo-firmware).
+  Quan surti una versió nova del firmware, cal tornar a generar el ZIP i actualitzar la versió d'aquesta taula.
