@@ -1,0 +1,812 @@
+//
+//===============================================================================================
+//  Programa: ControladorDMX2020
+//  Projecte: ARDMX1
+//  Versió: v1.5 documentada
+//
+//  Objectiu general:
+//    Aquest programa converteix un Arduino Mega + interfície DMX en una petita consola física
+//    per controlar canals DMX d’il·luminació de pessebres.
+//
+//  Funcionalitats principals:
+//    - Control de 50 canals DMX.
+//    - Visualització de 3 canals simultanis en una pantalla LCD 20x4 I2C.
+//    - Control de nivell dels canals amb 3 selectors rotatoris KY-40.
+//    - Selector addicional per canviar el grup de canals visibles.
+//    - Mode d’ajust fi x1 i mode ràpid x10 mitjançant el botó SW dels selectors P1/P2/P3.
+//    - Guardat automàtic dels valors a EEPROM.
+//    - Guardat retardat per evitar desgast innecessari de la EEPROM.
+//    - Reset general de tots els canals a zero.
+//    - LED heartbeat per confirmar que el programa està viu.
+//
+//  Arquitectura de comunicació:
+//    - DMX utilitza Serial0 mitjançant la llibreria Conceptinetics.
+//    - Per aquest motiu NO s’ha d’utilitzar Serial.begin() ni el monitor sèrie USB.
+//    - La pantalla LCD utilitza I2C.
+//    - Els selectors utilitzen pins digitals alts per evitar conflictes amb DMX.
+//
+//  Configuració obligatòria a Conceptinetics.h:
+//      #define USE_DMX_SERIAL_0
+//      //#define USE_DMX_SERIAL_2
+//
+//==================================================================================================
+
+
+//-----------------------------------------------------------------------------------------------
+// Text de versió que es mostra a la pantalla LCD.
+//
+// Es defineix com a array de char, seguint l’estil del programa original.
+// Aquest text apareix a la primera línia del display.
+//--------------------------------------------------------------------------------------------------
+
+char VERSIO[20] = "Prog v1.5";
+
+
+//--------------------------------------------------------------------------------------------------
+// Llibreries utilitzades.
+//
+// Wire.h:
+//   Necessària per la comunicació I2C amb la pantalla LCD.
+//
+// LiquidCrystal_I2C.h:
+//   Llibreria per controlar una pantalla LCD 20x4 amb mòdul I2C.
+//
+// EEPROM.h:
+//   Permet llegir i escriure valors a la memòria EEPROM interna de l’Arduino.
+//   Aquesta memòria conserva les dades encara que s’apagui l’alimentació.
+//
+// Conceptinetics.h:
+//   Llibreria encarregada de generar la senyal DMX512.
+//   En aquest projecte ha d’estar configurada per utilitzar Serial0.
+//--------------------------------------------------------------------------------------------------
+
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <EEPROM.h>
+#include <Conceptinetics.h>
+
+
+//==============================================================
+// CONFIGURACIÓ GENERAL DEL SISTEMA
+//==============================================================
+
+// Nombre de canals DMX que gestionarà aquest programa.
+// Encara que DMX pot arribar a 512 canals, aquí es limita a 50.
+#define NUM_CANALS 50
+
+// Nombre de canals que s’indica a la llibreria DMX.
+// S’utilitza el mateix valor que NUM_CANALS per mantenir coherència.
+#define DMX_MASTER_CHANNELS NUM_CANALS
+
+// Pin que controla el mode transmissió/recepció del mòdul DMX.
+// En el mòdul CTC-DRA-10-R2 aquest pin correspon a DE / RXEN.
+// En mode Master DMX, aquest pin permet habilitar l’enviament de senyal.
+#define RXEN_PIN 2
+
+// LED intern de l’Arduino Mega.
+// Es fa servir com a heartbeat, és a dir, com a indicador visual que el programa continua executant-se.
+#define PIN_LED 13
+
+// Pin utilitzat pel reset general de valors.
+// Està configurat amb INPUT_PULLUP, per tant el polsador ha de connectar el pin 8 a GND quan es prem.
+#define PIN_RESET 8
+
+
+//==============================================================
+// CONFIGURACIÓ DELS SELECTORS ROTATORIS KY-40
+//==============================================================
+//
+// Cada selector KY-40 disposa habitualment de:
+//
+//   CLK  -> senyal A o rellotge de l’encoder.
+//   DT   -> senyal B o dada de l’encoder.
+//   SW   -> polsador intern de l’encoder.
+//   +    -> alimentació 5V.
+//   GND  -> massa.
+//
+// En aquest projecte:
+//   - P1, P2 i P3 controlen el nivell DMX de tres canals visibles.
+//   - El selector de canals desplaça el grup de canals visibles.
+//   - Els botons SW de P1, P2 i P3 permeten passar de pas x1 a pas x10.
+//   - El selector de canals no utilitza SW per canvi ràpid; el seu SW s’ha reservat pel reset.
+//
+
+
+// Selector P1.
+// Controla el nivell del canal mostrat a la línia P1 de la pantalla.
+#define P1_DT 30
+#define P1_CLK 31
+#define P1_SW 38
+
+// Selector P2.
+// Controla el nivell del canal mostrat a la línia P2 de la pantalla.
+#define P2_DT 32
+#define P2_CLK 33
+#define P2_SW 39
+
+// Selector P3.
+// Controla el nivell del canal mostrat a la línia P3 de la pantalla.
+#define P3_DT 34
+#define P3_CLK 35
+#define P3_SW 40
+
+// Selector de canals.
+// Serveix per canviar quin grup de tres canals es mostra i es controla.
+#define PC_DT 36
+#define PC_CLK 37
+
+
+//==============================================================
+// CONFIGURACIÓ DE TEMPORITZACIONS
+//==============================================================
+
+// Temps mínim entre moviments acceptats d’un encoder.
+// Serveix per reduir lectures falses provocades pel rebot mecànic.
+#define REBOT_ENCODER 5
+
+// Temps d’espera abans de guardar a EEPROM després d’un canvi.
+// Si l’usuari gira un selector moltes vegades seguides, només es guarda el valor final.
+#define EEPROM_DELAY 700
+
+// Temps entre canvis d’estat del LED heartbeat.
+#define HEARTBEAT_TIME 1000
+
+
+//==============================================================
+// OBJECTES PRINCIPALS: LCD I DMX
+//==============================================================
+
+// Objecte de la pantalla LCD.
+// Paràmetres:
+//   0x27 -> adreça I2C del mòdul LCD.
+//   20   -> nombre de columnes.
+//   4    -> nombre de files.
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+
+// Objecte DMX Master.
+// Paràmetres:
+//   DMX_MASTER_CHANNELS -> nombre de canals que gestionarà.
+//   RXEN_PIN            -> pin que habilita el mòdul com a emissor DMX.
+DMX_Master dmx_master(DMX_MASTER_CHANNELS, RXEN_PIN);
+
+
+//==============================================================
+// VARIABLES D’ESTAT DELS CANALS
+//==============================================================
+
+// Canals que actualment es mostren a la pantalla.
+// Sempre són tres canals consecutius.
+int Canal_1 = 1;
+int Canal_2 = 2;
+int Canal_3 = 3;
+
+// Guarda l’últim canal base mostrat.
+// Permet detectar si el selector de canals ha canviat.
+int Canal_Anterior = 1;
+
+// Canal base seleccionat pel selector de canals.
+// Si CanalBase = 1, es mostren canals 1, 2 i 3.
+// Si CanalBase = 4, es mostren canals 4, 5 i 6.
+int CanalBase = 1;
+
+// Array amb el valor de nivell de cada canal DMX.
+// Es reserva una posició extra perquè treballarem amb canals 1..NUM_CANALS.
+// La posició 0 no s’utilitza.
+int Nivell[NUM_CANALS + 1];
+
+
+//==============================================================
+// VARIABLES DE POSICIÓ DELS SELECTORS DE NIVELL
+//==============================================================
+
+// Posició actual dels selectors P1, P2 i P3.
+// Aquest valor equival directament al nivell DMX que s’envia: 0..255.
+int Posicio1 = 0;
+int Posicio2 = 0;
+int Posicio3 = 0;
+
+// Últim valor processat de cada selector.
+// Permet detectar quan hi ha hagut un canvi real.
+int Anterior1 = 0;
+int Anterior2 = 0;
+int Anterior3 = 0;
+
+
+//==============================================================
+// VARIABLES PER LLEGIR ENCODERS
+//==============================================================
+
+// Últim estat llegit del pin DT de cada encoder.
+// S’utilitza per detectar flancs de canvi en la senyal.
+int lastA1;
+int lastA2;
+int lastA3;
+int lastA4;
+
+// Moment de l’últim moviment acceptat de cada encoder.
+// Permet aplicar el filtre de rebot.
+unsigned long lastMove1 = 0;
+unsigned long lastMove2 = 0;
+unsigned long lastMove3 = 0;
+unsigned long lastMove4 = 0;
+
+
+//==============================================================
+// VARIABLES DEL HEARTBEAT
+//==============================================================
+
+// Guarda l’últim moment en què es va canviar l’estat del LED.
+unsigned long lastHeartbeat = 0;
+
+// Estat actual del LED heartbeat.
+bool ledState = false;
+
+
+//==============================================================
+// VARIABLES PER GUARDAT RETARDAT A EEPROM
+//==============================================================
+//
+// Quan es modifica un canal, el valor s’envia immediatament al DMX,
+// però no s’escriu immediatament a EEPROM.
+//
+// Per què?
+//   La EEPROM té un nombre limitat d’escriptures.
+//   Si guardéssim cada pas del selector, la desgastaríem innecessàriament.
+//
+// Funcionament:
+//   - Quan canvia P1, es marca pendentGuardar1 = true.
+//   - Es guarda el temps del canvi.
+//   - Si passen EEPROM_DELAY ms sense nous canvis, es guarda a EEPROM.
+//   - Es mostra un asterisc al final de la línia corresponent.
+//
+
+bool pendentGuardar1 = false;
+bool pendentGuardar2 = false;
+bool pendentGuardar3 = false;
+
+unsigned long tempsCanvi1 = 0;
+unsigned long tempsCanvi2 = 0;
+unsigned long tempsCanvi3 = 0;
+
+
+//==============================================================
+// SETUP
+//==============================================================
+//
+// El setup() s’executa una sola vegada en arrencar l’Arduino.
+// Aquí es configuren pins, pantalla, DMX i es recuperen valors guardats.
+//
+
+void setup() {
+
+  // Configura el LED intern com a sortida.
+  pinMode(PIN_LED, OUTPUT);
+
+  // Configura el pin de reset amb pull-up intern.
+  // Això vol dir:
+  //   - sense prémer: HIGH
+  //   - premut contra GND: LOW
+  pinMode(PIN_RESET, INPUT_PULLUP);
+
+  // Configuració dels pins del selector P1.
+  // INPUT_PULLUP evita que els pins quedin flotants.
+  pinMode(P1_DT, INPUT_PULLUP);
+  pinMode(P1_CLK, INPUT_PULLUP);
+  pinMode(P1_SW, INPUT_PULLUP);
+
+  // Configuració dels pins del selector P2.
+  pinMode(P2_DT, INPUT_PULLUP);
+  pinMode(P2_CLK, INPUT_PULLUP);
+  pinMode(P2_SW, INPUT_PULLUP);
+
+  // Configuració dels pins del selector P3.
+  pinMode(P3_DT, INPUT_PULLUP);
+  pinMode(P3_CLK, INPUT_PULLUP);
+  pinMode(P3_SW, INPUT_PULLUP);
+
+  // Configuració dels pins del selector de canals.
+  pinMode(PC_DT, INPUT_PULLUP);
+  pinMode(PC_CLK, INPUT_PULLUP);
+
+  // Lectura inicial dels pins DT.
+  // Això serveix com a punt de comparació per detectar futurs canvis.
+  lastA1 = digitalRead(P1_DT);
+  lastA2 = digitalRead(P2_DT);
+  lastA3 = digitalRead(P3_DT);
+  lastA4 = digitalRead(PC_DT);
+
+  // Inicialitza la pantalla LCD.
+  lcd.init();
+
+  // Encén la llum de fons del display.
+  lcd.backlight();
+
+  // Missatge inicial de diagnòstic visual.
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("ARDMX1 v1.4");
+  lcd.setCursor(0, 1);
+  lcd.print("Inicialitzant...");
+  delay(1000);
+
+  // Activa la sortida DMX.
+  // A partir d’aquest moment, la llibreria comença a gestionar la transmissió DMX.
+  dmx_master.enable();
+
+  // Carrega de la EEPROM els nivells guardats dels canals.
+  carregarEEPROM();
+
+  // Carrega als selectors els valors dels canals visibles inicials.
+  carregarCanalsPantalla();
+
+  // Escriu l’estat inicial al LCD.
+  EscriureLCD();
+
+  // Envia tots els nivells recuperats a la sortida DMX.
+  EnviarDMX();
+}
+
+
+//==============================================================
+// LOOP PRINCIPAL
+//==============================================================
+//
+// El loop() s’executa contínuament.
+// És el cor del programa.
+//
+// Ordre de treball:
+//   1. Parpellejar LED heartbeat.
+//   2. Llegir selectors.
+//   3. Comprovar reset.
+//   4. Comprovar si ha canviat el canal base.
+//   5. Comprovar si han canviat els nivells.
+//   6. Guardar a EEPROM si toca.
+//
+
+void loop() {
+
+  heartbeat();
+
+  LlegirSelectors();
+
+  comprovarReset();
+
+  comprovarCanviCanal();
+
+  comprovarCanviNivells();
+
+  guardarEEPROMRetardada();
+}
+
+
+//==============================================================
+// LECTURA DELS SELECTORS
+//==============================================================
+//
+// Aquesta funció agrupa la lectura dels quatre encoders.
+// P1/P2/P3 són selectors de nivell.
+// PC és el selector de canal base.
+//
+
+void LlegirSelectors() {
+
+  // Llegeix selector P1 amb suport per pas x1/x10.
+  llegirEncoderNivell(P1_DT, P1_CLK, P1_SW, lastA1, Posicio1, lastMove1);
+
+  // Llegeix selector P2 amb suport per pas x1/x10.
+  llegirEncoderNivell(P2_DT, P2_CLK, P2_SW, lastA2, Posicio2, lastMove2);
+
+  // Llegeix selector P3 amb suport per pas x1/x10.
+  llegirEncoderNivell(P3_DT, P3_CLK, P3_SW, lastA3, Posicio3, lastMove3);
+
+  // Llegeix selector de canals.
+  // Aquest sempre va de 1 en 1.
+  llegirEncoderCanal(PC_DT, PC_CLK, lastA4, CanalBase, lastMove4);
+}
+
+
+//--------------------------------------------------------------
+// llegirEncoderNivell()
+//
+// Funció genèrica per llegir un encoder que controla un valor DMX.
+//
+// Paràmetres:
+//   pinA:
+//     Pin DT de l’encoder.
+//
+//   pinB:
+//     Pin CLK de l’encoder.
+//
+//   pinSW:
+//     Pin del botó SW de l’encoder.
+//     Si està premut, el pas és x10.
+//
+//   lastA:
+//     Variable on es guarda l’estat anterior de pinA.
+//
+//   valor:
+//     Valor que volem modificar.
+//     En aquest cas serà Posicio1, Posicio2 o Posicio3.
+//
+//   lastMove:
+//     Moment de l’últim moviment acceptat.
+//
+// Funcionament:
+//   - Es detecta un canvi en pinA.
+//   - Només es processa quan pinA passa a LOW.
+//   - Es comprova el temps de rebot.
+//   - Es mira pinSW per saber si el pas és 1 o 10.
+//   - Es mira pinB per decidir si cal sumar o restar.
+//   - Es limita el valor entre 0 i 255.
+//--------------------------------------------------------------
+
+void llegirEncoderNivell(
+  int pinA,
+  int pinB,
+  int pinSW,
+  int &lastA,
+  int &valor,
+  unsigned long &lastMove
+) {
+
+  int currentA = digitalRead(pinA);
+
+  if (currentA != lastA && currentA == LOW) {
+
+    if (millis() - lastMove > REBOT_ENCODER) {
+
+      int pas = 1;
+
+      if (digitalRead(pinSW) == LOW) {
+        pas = 10;
+      }
+
+      if (digitalRead(pinB) == HIGH) {
+        valor += pas;
+      } else {
+        valor -= pas;
+      }
+
+      valor = constrain(valor, 0, 255);
+
+      lastMove = millis();
+    }
+  }
+
+  lastA = currentA;
+}
+
+
+//--------------------------------------------------------------
+// llegirEncoderCanal()
+//
+// Llegeix l’encoder que selecciona el canal base.
+//
+// Diferència amb els selectors P1/P2/P3:
+//   - No té mode x10.
+//   - Sempre puja o baixa d’un en un.
+//   - El límit superior és NUM_CANALS - 2 perquè sempre es mostren
+//     tres canals consecutius.
+//
+// Exemple:
+//   Si NUM_CANALS = 50,
+//   CanalBase pot anar de 1 a 48.
+//   Així els canals visibles poden ser 48, 49 i 50.
+//--------------------------------------------------------------
+
+void llegirEncoderCanal(
+  int pinA,
+  int pinB,
+  int &lastA,
+  int &valor,
+  unsigned long &lastMove
+) {
+
+  int currentA = digitalRead(pinA);
+
+  if (currentA != lastA && currentA == LOW) {
+
+    if (millis() - lastMove > REBOT_ENCODER) {
+
+      if (digitalRead(pinB) == HIGH) {
+        valor++;
+      } else {
+        valor--;
+      }
+
+      valor = constrain(valor, 1, NUM_CANALS - 2);
+
+      lastMove = millis();
+    }
+  }
+
+  lastA = currentA;
+}
+
+
+//==============================================================
+// CANVI DE CANAL BASE
+//==============================================================
+//
+// Aquesta funció detecta si l’usuari ha mogut el selector de canals.
+// Quan canvia CanalBase, es recalculen els tres canals visibles.
+//
+
+void comprovarCanviCanal() {
+
+  if (CanalBase != Canal_Anterior) {
+
+    Canal_1 = CanalBase;
+    Canal_2 = CanalBase + 1;
+    Canal_3 = CanalBase + 2;
+
+    carregarCanalsPantalla();
+
+    Canal_Anterior = CanalBase;
+
+    EscriureLCD();
+  }
+}
+
+
+//--------------------------------------------------------------
+// carregarCanalsPantalla()
+//
+// Quan canvia el grup de canals visibles, aquesta funció carrega
+// els nivells guardats d’aquests canals als selectors.
+//
+// També sincronitza Anterior1/2/3 amb Posicio1/2/3.
+// Això evita que el programa interpreti el canvi de pantalla com
+// si l’usuari hagués mogut físicament un selector.
+//--------------------------------------------------------------
+
+void carregarCanalsPantalla() {
+
+  Posicio1 = Nivell[Canal_1];
+  Posicio2 = Nivell[Canal_2];
+  Posicio3 = Nivell[Canal_3];
+
+  Anterior1 = Posicio1;
+  Anterior2 = Posicio2;
+  Anterior3 = Posicio3;
+}
+
+
+//==============================================================
+// CANVI DE NIVELLS DMX
+//==============================================================
+//
+// Aquesta funció comprova si P1, P2 o P3 han canviat.
+// Si han canviat:
+//   - Actualitza el valor dins l’array Nivell[].
+//   - Envia el nou valor al canal DMX corresponent.
+//   - Marca que cal guardar a EEPROM.
+//   - Actualitza el LCD.
+//
+
+void comprovarCanviNivells() {
+
+  if (Posicio1 != Anterior1) {
+    Nivell[Canal_1] = Posicio1;
+    dmx_master.setChannelValue(Canal_1, Nivell[Canal_1]);
+
+    Anterior1 = Posicio1;
+    pendentGuardar1 = true;
+    tempsCanvi1 = millis();
+
+    EscriureLCD();
+  }
+
+  if (Posicio2 != Anterior2) {
+    Nivell[Canal_2] = Posicio2;
+    dmx_master.setChannelValue(Canal_2, Nivell[Canal_2]);
+
+    Anterior2 = Posicio2;
+    pendentGuardar2 = true;
+    tempsCanvi2 = millis();
+
+    EscriureLCD();
+  }
+
+  if (Posicio3 != Anterior3) {
+    Nivell[Canal_3] = Posicio3;
+    dmx_master.setChannelValue(Canal_3, Nivell[Canal_3]);
+
+    Anterior3 = Posicio3;
+    pendentGuardar3 = true;
+    tempsCanvi3 = millis();
+
+    EscriureLCD();
+  }
+}
+
+
+//==============================================================
+// EEPROM RETARDADA
+//==============================================================
+//
+// Guarda els valors a EEPROM només quan han passat 700 ms
+// des de l’últim canvi.
+//
+// Això millora molt la vida útil de la EEPROM.
+//
+
+void guardarEEPROMRetardada() {
+
+  if (pendentGuardar1 && millis() - tempsCanvi1 > EEPROM_DELAY) {
+    EEPROM.update(Canal_1, Nivell[Canal_1]);
+    pendentGuardar1 = false;
+    mostrarGuardat(1);
+  }
+
+  if (pendentGuardar2 && millis() - tempsCanvi2 > EEPROM_DELAY) {
+    EEPROM.update(Canal_2, Nivell[Canal_2]);
+    pendentGuardar2 = false;
+    mostrarGuardat(2);
+  }
+
+  if (pendentGuardar3 && millis() - tempsCanvi3 > EEPROM_DELAY) {
+    EEPROM.update(Canal_3, Nivell[Canal_3]);
+    pendentGuardar3 = false;
+    mostrarGuardat(3);
+  }
+}
+
+
+//--------------------------------------------------------------
+// mostrarGuardat()
+//
+// Mostra un asterisc al final de la línia del selector quan
+// el valor s’ha guardat a EEPROM.
+//
+// selector:
+//   1 -> línia P1
+//   2 -> línia P2
+//   3 -> línia P3
+//--------------------------------------------------------------
+
+void mostrarGuardat(int selector) {
+  lcd.setCursor(19, selector);
+  lcd.print("*");
+}
+
+
+//==============================================================
+// RESET
+//==============================================================
+//
+// El reset posa tots els canals a 0, actualitza la EEPROM
+// i envia tots els canals apagats per DMX.
+//
+
+void comprovarReset() {
+
+  if (digitalRead(PIN_RESET) == LOW) {
+    ResetValors();
+    delay(500);
+  }
+}
+
+
+void ResetValors() {
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Reset valors...");
+
+  for (int i = 1; i <= NUM_CANALS; i++) {
+    Nivell[i] = 0;
+    EEPROM.update(i, 0);
+    dmx_master.setChannelValue(i, 0);
+  }
+
+  carregarCanalsPantalla();
+
+  pendentGuardar1 = false;
+  pendentGuardar2 = false;
+  pendentGuardar3 = false;
+
+  delay(500);
+
+  EscriureLCD();
+}
+
+
+//==============================================================
+// DMX
+//==============================================================
+//
+// Envia tots els canals guardats a l’array Nivell[].
+// S’utilitza sobretot en arrencada.
+//
+
+void EnviarDMX() {
+
+  for (int i = 1; i <= NUM_CANALS; i++) {
+    dmx_master.setChannelValue(i, Nivell[i]);
+  }
+}
+
+
+//==============================================================
+// EEPROM
+//==============================================================
+//
+// Recupera els nivells guardats a EEPROM en arrencar.
+// Cada canal utilitza la seva mateixa posició d’EEPROM.
+// Canal 1 -> EEPROM[1]
+// Canal 2 -> EEPROM[2]
+// etc.
+//
+
+void carregarEEPROM() {
+
+  for (int i = 1; i <= NUM_CANALS; i++) {
+    Nivell[i] = EEPROM.read(i);
+  }
+}
+
+
+//==============================================================
+// LCD
+//==============================================================
+//
+// Mostra a pantalla:
+//   - Versió del programa.
+//   - Nom ARDMX1.
+//   - Nombre de canals configurats.
+//   - Canal i nivell dels tres selectors.
+//
+
+void EscriureLCD() {
+
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.print(VERSIO);
+
+  lcd.setCursor(10, 0);
+  lcd.print("ARDMX1 #");
+  lcd.print(NUM_CANALS);
+
+  lcd.setCursor(0, 1);
+  lcd.print("P1 Canal=");
+  lcd.print(Canal_1);
+  lcd.setCursor(14, 1);
+  lcd.print("N=");
+  lcd.print(Nivell[Canal_1]);
+
+  lcd.setCursor(0, 2);
+  lcd.print("P2 Canal=");
+  lcd.print(Canal_2);
+  lcd.setCursor(14, 2);
+  lcd.print("N=");
+  lcd.print(Nivell[Canal_2]);
+
+  lcd.setCursor(0, 3);
+  lcd.print("P3 Canal=");
+  lcd.print(Canal_3);
+  lcd.setCursor(14, 3);
+  lcd.print("N=");
+  lcd.print(Nivell[Canal_3]);
+}
+
+
+//==============================================================
+// HEARTBEAT
+//==============================================================
+//
+// Fa parpellejar el LED 13 cada segon.
+// Si el LED parpelleja, el programa està viu.
+// Si deixa de parpellejar, el programa pot estar bloquejat.
+//
+
+void heartbeat() {
+
+  if (millis() - lastHeartbeat > HEARTBEAT_TIME) {
+    ledState = !ledState;
+    digitalWrite(PIN_LED, ledState);
+    lastHeartbeat = millis();
+  }
+}

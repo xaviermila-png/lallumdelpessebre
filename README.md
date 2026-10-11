@@ -12,6 +12,12 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
 | [ARDMX/Firmware_ARDMX_One.zip](ARDMX/Firmware_ARDMX_One.zip) | Firmware ARDMX One: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.2 | compilat el 13/09/2026 |
 | [ARDMX/Firmware_ARDMX_EVO.zip](ARDMX/Firmware_ARDMX_EVO.zip) | Firmware ARDMX EVO: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.1 | compilat el 13/09/2026 |
 
+## ARDMX1 (2021)
+
+| Fitxer | Descripció | Versió |
+|---|---|---|
+| [ARDMX1/Programa_ARDMX1.txt](ARDMX1/Programa_ARDMX1.txt) | Programa en C++ de l'ARDMX1 per a l'Arduino Mega 2560 | v1.5 |
+
 ## Cursos
 
 | Fitxer | Descripció | Data |
