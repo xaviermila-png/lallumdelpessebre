@@ -22,9 +22,12 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
 
 ## Origen dels fitxers
 
-- Els ZIP de firmware contenen la carpeta `installer_standalone/` de
+- Els ZIP de firmware es generen amb `python3 eines/genera_zip_firmware.py <ardmx-one-firmware> <ardmx-evo-firmware>`.
+  Contenen la carpeta `installer_standalone/` de
   [ardmx-one-firmware](https://github.com/xaviermila-png/ardmx-one-firmware) i
   [ardmx-evo-firmware](https://github.com/xaviermila-png/ardmx-evo-firmware),
   més una subcarpeta `Codi_font/` amb `src/`, `platformio.ini`, `partitions.csv`,
-  `README.md` i `LICENSE` del mateix repositori.
+  `README.md` i `LICENSE` del mateix repositori, i un `LLEGEIX-ME.txt` propi (definit a l'script)
+  que explica les dues parts i quan fer servir `update_*.bat` (conserva la configuració)
+  o `install_*.bat` (instal·lació neta, l'esborra).
   Quan surti una versió nova del firmware, cal tornar a generar el ZIP i actualitzar la versió d'aquesta taula.
