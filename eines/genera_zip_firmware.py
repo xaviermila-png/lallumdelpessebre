@@ -44,7 +44,7 @@ CONTROLADORS = {
 }
 
 PLANTILLA = """\
-ARDMX {nom} — Firmware {versio}
+ARDMX {nom} — Firmware {versio} (compilat el {data})
 {subratllat}
 
 Aquest ZIP conté dues coses:
@@ -118,19 +118,23 @@ Més informació: https://lallumdelpessebre.cat
 """
 
 
-def versio(installer: Path) -> str:
-    primera = (installer / "bin" / "version.txt").read_text(encoding="utf-8").splitlines()[0]
-    return primera.split()[-1]  # "ARDMX One v2.2" -> "v2.2"
+def versio(installer: Path) -> tuple[str, str]:
+    """Llegeix bin/version.txt -> ("v2.2", "13/09/2026")."""
+    linies = (installer / "bin" / "version.txt").read_text(encoding="utf-8").splitlines()
+    ver = linies[0].split()[-1]  # "ARDMX One v2.2" -> "v2.2"
+    data = next(l for l in linies if l.startswith("Generat:")).split()[-1]  # "2026-09-13"
+    a, m, d = data.split("-")
+    return ver, f"{d}/{m}/{a}"
 
 
 def genera(nom: str, repo_fw: Path) -> Path:
     cfg = CONTROLADORS[nom]
     inst = repo_fw / "installer_standalone"
-    ver = versio(inst)
+    ver, data = versio(inst)
     arrel = f"Firmware_ARDMX_{nom}"
-    titol = f"ARDMX {nom} — Firmware {ver}"
+    titol = f"ARDMX {nom} — Firmware {ver} (compilat el {data})"
     llegeix = PLANTILLA.format(
-        nom=nom, versio=ver, subratllat="=" * len(titol), **cfg
+        nom=nom, versio=ver, data=data, subratllat="=" * len(titol), **cfg
     ).replace("\n", "\r\n")
 
     desti = REPO / "ARDMX" / f"{arrel}.zip"
@@ -147,7 +151,7 @@ def genera(nom: str, repo_fw: Path) -> Path:
             for m in t.getmembers():
                 if m.isfile():
                     z.writestr(f"{arrel}/Codi_font/{m.name}", t.extractfile(m).read())
-    print(f"{desti.relative_to(REPO)}  ({ver})")
+    print(f"{desti.relative_to(REPO)}  ({ver}, compilat el {data})")
     return desti
 
 

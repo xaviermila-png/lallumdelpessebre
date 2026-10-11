@@ -5,12 +5,12 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
 
 ## ARDMX (2026) — versió actual
 
-| Fitxer | Descripció | Versió |
-|---|---|---|
-| [ARDMX/Manual_APP_ARDMX_CAT.pdf](ARDMX/Manual_APP_ARDMX_CAT.pdf) | Manual de l'APP ARDMX (català) | 3.0 |
-| [ARDMX/Manual_APP_ARDMX_CAST.pdf](ARDMX/Manual_APP_ARDMX_CAST.pdf) | Manual de la APP ARDMX (castellano) | 3.0 |
-| [ARDMX/Firmware_ARDMX_One.zip](ARDMX/Firmware_ARDMX_One.zip) | Firmware ARDMX One: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.2 |
-| [ARDMX/Firmware_ARDMX_EVO.zip](ARDMX/Firmware_ARDMX_EVO.zip) | Firmware ARDMX EVO: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.1 |
+| Fitxer | Descripció | Versió | Data |
+|---|---|---|---|
+| [ARDMX/Manual_APP_ARDMX_CAT.pdf](ARDMX/Manual_APP_ARDMX_CAT.pdf) | Manual de l'APP ARDMX (català) | 3.0 | |
+| [ARDMX/Manual_APP_ARDMX_CAST.pdf](ARDMX/Manual_APP_ARDMX_CAST.pdf) | Manual de la APP ARDMX (castellano) | 3.0 | |
+| [ARDMX/Firmware_ARDMX_One.zip](ARDMX/Firmware_ARDMX_One.zip) | Firmware ARDMX One: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.2 | compilat el 13/09/2026 |
+| [ARDMX/Firmware_ARDMX_EVO.zip](ARDMX/Firmware_ARDMX_EVO.zip) | Firmware ARDMX EVO: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.1 | compilat el 13/09/2026 |
 
 ## Normes del repositori
 
@@ -30,4 +30,5 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
   `README.md` i `LICENSE` del mateix repositori, i un `LLEGEIX-ME.txt` propi (definit a l'script)
   que explica les dues parts. **No** s'hi inclou `update_*.bat`: l'únic camí és `install_*.bat`,
   que esborra tota la configuració i deixa el controlador de fàbrica.
-  Quan surti una versió nova del firmware, cal tornar a generar el ZIP i actualitzar la versió d'aquesta taula.
+  Quan surti una versió nova del firmware, cal tornar a generar el ZIP i actualitzar la versió i la data d'aquesta taula
+  (l'script les llegeix de `bin/version.txt` de l'instal·lador).
