@@ -24,7 +24,7 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
 
 - Els ZIP de firmware contenen la carpeta `installer_standalone/` de
   [ardmx-one-firmware](https://github.com/xaviermila-png/ardmx-one-firmware) i
-  [ardmx-evo-firmware](https://github.com/xaviermila-png/ardmx-evo-firmware).
+  [ardmx-evo-firmware](https://github.com/xaviermila-png/ardmx-evo-firmware),
   més una subcarpeta `Codi_font/` amb `src/`, `platformio.ini`, `partitions.csv`,
   `README.md` i `LICENSE` del mateix repositori.
   Quan surti una versió nova del firmware, cal tornar a generar el ZIP i actualitzar la versió d'aquesta taula.
