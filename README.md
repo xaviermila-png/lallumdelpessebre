@@ -12,6 +12,13 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
 | [ARDMX/Firmware_ARDMX_One.zip](ARDMX/Firmware_ARDMX_One.zip) | Firmware ARDMX One: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.2 | compilat el 13/09/2026 |
 | [ARDMX/Firmware_ARDMX_EVO.zip](ARDMX/Firmware_ARDMX_EVO.zip) | Firmware ARDMX EVO: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.1 | compilat el 13/09/2026 |
 
+## Cursos
+
+| Fitxer | Descripció | Data |
+|---|---|---|
+| [Cursos/Xerrada_Tarragona_2026.pdf](Cursos/Xerrada_Tarragona_2026.pdf) | Presentació de la xerrada col·loqui sobre il·luminació de pessebres, Associació Pessebrista de Tarragona | 11/07/2026 |
+| [Cursos/Curs_DMX_Vilanova_2026.pdf](Cursos/Curs_DMX_Vilanova_2026.pdf) | Presentació del curs d'il·luminació amb DMX, Associació Pessebrista de Vilanova i la Geltrú | 19/06/2026 |
+
 ## Normes del repositori
 
 - Una carpeta per secció de la web: `ARDMX/`, `ARDMX4/`, `ARDMX2/`, `ARDMX1/`, `Cursos/`…
