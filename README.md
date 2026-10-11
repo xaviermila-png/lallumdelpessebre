@@ -12,10 +12,26 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
 | [ARDMX/Firmware_ARDMX_One.zip](ARDMX/Firmware_ARDMX_One.zip) | Firmware ARDMX One: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.2 | compilat el 13/09/2026 |
 | [ARDMX/Firmware_ARDMX_EVO.zip](ARDMX/Firmware_ARDMX_EVO.zip) | Firmware ARDMX EVO: instal·lador per a Windows (instruccions a LLEGEIX-ME.txt) i codi font a `Codi_font/` | v2.1 | compilat el 13/09/2026 |
 
+## ARDMX4 (2025)
+
+| Fitxer | Descripció | Versió |
+|---|---|---|
+| [ARDMX4/Manual_ARDMX4.pdf](ARDMX4/Manual_ARDMX4.pdf) | Manual de funcionament de l'ARDMX4 | 2025 |
+| [ARDMX4/Arquitectura_ARDMX4.pdf](ARDMX4/Arquitectura_ARDMX4.pdf) | Document d'arquitectura de l'ARDMX4 | v1.0 |
+| [ARDMX4/Programa_ARDMX4.txt](ARDMX4/Programa_ARDMX4.txt) | Programa en C++ de l'ARDMX4 per a l'Arduino Mega 2560 | v4.13 |
+
+## ARDMX2 (2022)
+
+| Fitxer | Descripció | Versió |
+|---|---|---|
+| [ARDMX2/Arquitectura_ARDMX2.pdf](ARDMX2/Arquitectura_ARDMX2.pdf) | Arquitectura i esquema de connexions de l'ARDMX2 | — |
+| [ARDMX2/Programa_ARDMX2.txt](ARDMX2/Programa_ARDMX2.txt) | Programa en C++ de l'ARDMX2 per a l'Arduino Mega 2560 | v1.0 |
+
 ## ARDMX1 (2021)
 
 | Fitxer | Descripció | Versió |
 |---|---|---|
+| [ARDMX1/Arquitectura_ARDMX1.pdf](ARDMX1/Arquitectura_ARDMX1.pdf) | Document d'arquitectura de l'ARDMX1 | v1.0 |
 | [ARDMX1/Programa_ARDMX1.txt](ARDMX1/Programa_ARDMX1.txt) | Programa en C++ de l'ARDMX1 per a l'Arduino Mega 2560 | v1.5 |
 
 ## Cursos

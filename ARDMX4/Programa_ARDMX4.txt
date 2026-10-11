@@ -1,0 +1,2392 @@
+//=======================================================================================================
+//  Programa:
+//  Títol: Controlador DMX Bluetooth per il·luminació de Pessebres
+//  Desenvolupador: Xavier Milà vidal
+//  Contacte: xavier.mila@gmail.com
+//
+//  Llicència: 
+//  Creative Commons BY-NC-SA 4.0
+//  (Reconeixement – No Comercial – Compartir Igual)
+//
+//  Aquest projecte és lliure per a ús personal i educatiu.
+//  No es permet fer-ne ús comercial.
+//  Si el modifiques, comparteix-ho amb la comunitat.
+//
+//  Més informació: 
+//  https://creativecommons.org/licenses/by-nc-sa/4.0/
+//  https://ardmx4.blogspot.com/
+//
+//  Data: 06/2026
+//
+//  Descripció:
+//    - Controladora Arduino de il·luminació de pessebres a traves del protocol DMX512. 
+//    - Configurat per controlar 100 canals.
+//    - Es base en un Arduino Mega i un controlador DMX CTC-DRA-10-R2
+//    - Utilitza una memòria EEPROM per conservar la ultima configuració quan perd la alimentació 
+//    - La interacció es fa des de un mòbil a traves de Bluetooth
+//    - La APP del mòbil esta construïda sobre el framework VIRTUINO
+//    - Es poden configurar 4 escenes amb les corresponents transicions entre elles
+//    - Es pot fer que el cicle segueixi la reproducció de una musica mp3
+//    - S'utilitza els DFPlayer Mini per la reproducció de la musica
+//
+//=======================================================================================================
+//=======================================================================================================
+// DOCUMENTACIÓ INTEGRADA DEL CODI
+// ------------------------------------------------------------------------------------------------------
+// Aquest fitxer manté el codi original i afegeix comentaris explicatius dins del mateix codi.
+// L'objectiu és que una persona que no conegui el programa pugui entendre:
+//   1) què controla cada bloc,
+//   2) quina funció tenen les variables principals,
+//   3) com es comuniquen Arduino, Virtuino, DMX, EEPROM i DFPlayer Mini,
+//   4) com funciona el cicle d'escenes i transicions.
+//
+// NOTA IMPORTANT SOBRE L'ARQUITECTURA:
+//   - Virtuino envia i rep dades mitjançant l'array V[].
+//   - Els canals DMX es representen amb objectes CanalDMX.
+//   - Els valors permanents es guarden a EEPROM perquè es conservin després d'apagar l'Arduino.
+//   - El DFPlayer Mini reprodueix música MP3 associada al cicle.
+//   - El cicle alterna estats fixos i estats de transició:
+//       Estat 0 = Escena 1 fixa
+//       Estat 1 = Transició Escena 1 -> Escena 2
+//       Estat 2 = Escena 2 fixa
+//       Estat 3 = Transició Escena 2 -> Escena 3
+//       Estat 4 = Escena 3 fixa
+//       Estat 5 = Transició Escena 3 -> Escena 4
+//       Estat 6 = Escena 4 fixa
+//       Estat 7 = Transició Escena 4 -> Escena 1
+//=======================================================================================================
+String NomPrograma    = "ARDMX4";		      // Nom del programa
+String VersioPrograma = "V4.13";		      // Versió del programa
+//
+//=======================================================================================================
+// Opcions de debug del programa
+//
+bool trace1 = true;
+bool trace2 = false;
+//
+//=======================================================================================================
+// Numero de canals que gestiona el programa
+//
+#define MAX_CANALS 100        // Màxim de canals que pot gestionar el programa
+int NUM_CANALS = 36;          // Número real de canals gestionats, es carregará de EEPROM o Virtuino
+//
+//=======================================================================================================
+//  Llibreria i sentencies de definició del DMX Shield MAX485 de CQRobot (CTC-DRA-10-R2)
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// 	Llibreria Conceptinetics_RDM_alpha3_2.zip
+// 	https://sourceforge.net/projects/dmxlibraryforar/files/
+//
+//    - Per ser compatibles les comunicacions sèrie d'aquest mòdul amb el de bluetooth s'ha de modificar el fitxer Conceptinetics.h 
+//      ubicat a ...\Documents\Arduino\libraries\Conceptinetics comentant la línia "#define USE_DMX_SERIAL_0" 
+//      i descomentant la línia "#define USE_DMX_SERIAL_2"
+//    - Això fa que la comunicació de l'Arduino Mega cap al mòdul DMX surti pels pins RX17 i TX16    
+//    - Els 2 pins RX17 i TX16 del Arduino Mega s'han de puntejar amb els pins digitals 3 i 4 del mòdul DMX  
+//    - Els Jumpers [TX-io - TX-uart] i [RX-io - RX-uart]han de estar en posició TX-io i RX-io. Aixo fa  
+//      que el modul es comuniqui a traves dels pins digitals 3 (RX) i 4 (TX)  
+//    - El Jumper [EN - /EN] ha d'estar a /EN per carregar el programa i a EN per executar el programa
+//    - Com que volem que modul sigui el Master DMX, el Jumper [Slave - DE] ha de estar en DE 
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------
+//
+#include <Conceptinetics.h>
+#define DMX_MASTER_CHANNELS 512            		//Numero de canals que controlara el Master (<515)
+#define RXEN_PIN            2           			//Pin que posa en lectura o escritura el modul
+//
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Configura el mòdul com a controlador MASTER DMX a traves del pin RXEN_PIN 
+// 
+DMX_Master dmx_master ( DMX_MASTER_CHANNELS, RXEN_PIN );
+//
+//=======================================================================================================
+// DFPlayer - A Mini MP3 Player For Arduino https://www.dfrobot.com/product-1121.html
+// El DFPlayer Utilitzem el Hardware Serial3 - 15RX3 / 14TX3
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------
+//
+#include "DFRobotDFPlayerMini.h"
+//
+//=======================================================================================================
+// EEPROM - Llibreria per poder gestionar la memoria EEPROM del Arduino Mega
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------
+//
+#include <EEPROM.h>
+#define EEPROM_ADDR_PARAMETRES     0  // Direccio base a la EEPROM per guardar parametres
+#define EEPROM_ADDR_CANALS        100  // Direccio base a la EEPROM per guardar dades dels canals
+//
+//=======================================================================================================
+// Llibreria i sentencies de definició de la Interface Virtuino a traves de l'antena bluetooth 
+//-------------VirtuinoCM  Library and settings --------------
+//
+#include "VirtuinoCM.h"
+VirtuinoCM virtuino;               
+// ------------------------------------------------------------------------------------------------------
+// MAPA ORIENTATIU DE MEMÒRIES VIRTUINO UTILITZADES
+// ------------------------------------------------------------------------------------------------------
+// V[0]  = número de música MP3 seleccionada.
+// V[1]  = valor DMX del primer canal visible a pantalla.
+// V[2]  = valor DMX del segon canal visible a pantalla.
+// V[3]  = valor DMX del tercer canal visible a pantalla.
+// V[4]  = número del primer canal visible.
+// V[5]  = número del segon canal visible.
+// V[6]  = número del tercer canal visible.
+// V[7]  = ordre per avançar o retrocedir grups de canals.
+// V[9]  = escena activa.
+// V[10] = estat actual del cicle mostrat a Virtuino.
+// V[11] = selector principal de funcionament.
+// V[12] = botó Play/Stop de música.
+// V[13] = botó Pausa.
+// V[14] = temps actual de reproducció/cicle en segons.
+// V[15] = temps total del cicle en segons.
+// V[16] = volum del DFPlayer Mini.
+// V[18] = nombre d'escenes actives.
+// V[21]..V[28] = temps acumulats dels períodes del cicle.
+// V[31]..V[33] = modes de transició dels tres canals visibles.
+// V[35] = ordre de canvi d'escena activa.
+// V[39] = nombre màxim de canals admesos.
+// V[40] = nombre de canals actius configurats.
+// V[41], V[42] = confirmació doble per reset de configuració.
+// V[50] = pantalla o apartat de configuració actiu.
+// ------------------------------------------------------------------------------------------------------
+#define V_memory_count 60 	// the size of V memory. You can change it to a number <=255)
+float V[V_memory_count];		// This array is synchronized with Virtuino V memory. You can change the type to int, long etc.
+boolean debug = false ;    // set this variable to false on the finale code to decrease the request time.
+//
+String text1=(" ");
+String text2=(VersioPrograma);
+String text3=(" ");      
+//
+//=======================================================================================================
+//  Llibreria TimerOne.h - Trigger per temps
+//-------------------------------------------------------------------------------------------------------
+// que durant el SETUP() s’encen i s’apaga un LED
+// S’utilitza la funció de Timer per simular un Trigger 
+// (un disparador de temps) per que durant el SETUP() s’encengui i s’apagui un LED
+//
+#include <TimerOne.h>
+const int ledPin1 = 13;  // Pin 13 per encendre i apagar el LED12
+//
+//------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Definició de variables de treball (vells)
+//
+int Canal_1 = 1;                                    // Canal 1
+int Canal_2 = 2;                                    // Canal 2
+int Canal_3 = 3;                                    // Canal 3
+int EscenaActiva =  1;                               // V[9]
+int NumeroEscenes = 1;                              // V[18] = 1,2,3,4                      
+String EstatPlay = "Stop";
+String InstruccioMP3 = "..." ;
+unsigned long tempsPlay = 0;
+unsigned long tempsPlayInici = 0;
+unsigned long tempsPlayAcumulat = 0;
+int EstatSelector = 0 ;
+int NivellVolum = 0;                        // V[16] = 0 ... 30
+int MusicaMP3 = 1 ;                         // V[0]
+unsigned long TempsAcumulat[8] ;            // Temps acumulat del cilce en el periode V21 ... V28
+unsigned long Temps[8] ;                    // Temps unitaris periodes
+unsigned long TempsTransicio_1;
+unsigned long TempsTransicio_2;
+unsigned long TempsTransicio_3;
+unsigned long TempsTransicio_4;
+unsigned long TempsCanvi = 0;
+int NumeroPantalla = 0;
+int num_periodes = NumeroEscenes * 2;     // Numero de periodes 
+unsigned long tiempoTotalCiclo = 0;
+unsigned long tempsActualEstat = 0;
+unsigned long tempsActualCicle = 0;
+unsigned long referenciaTempsCicle = 0; 
+unsigned long referenciaTempsEstat = 0;
+unsigned long tempsActualTransicio = 0; 
+unsigned long referenciaTempsTransicio = 0;
+unsigned long contadorPuntTransicio = 0;
+unsigned long numeroPuntsTransicio = 0;
+unsigned long tempsCiclesTransicio = 10000; // valor >= 10000 microsegons
+int EstatActual = 0;
+int EstatAntic = 0;
+const int pinTrigger = 12;
+bool triggerAnterior = false;
+bool cicloEnCurso = false;
+
+
+// Estructura para guardar los datos de un canal
+struct CanalEEPROMData {
+  int valores[4];
+  int modos[4];
+};
+
+// Estructura para almacenar todos los parámetros de un canal
+struct ParametrosCanal {
+    int canal;
+    int valores[4];
+    float valorActual;
+    int modos[4];
+};
+
+// Estructura global para almacenar parámetros de todos los canales
+ParametrosCanal parametrosCanales[MAX_CANALS];
+
+// Estructura para guardar la configuracios del programa
+struct ParametresGenerals {
+  int EscenaActiva;
+  int NumeroEscenes;
+  int NumeroMusica;
+  int NivellVolum;
+  int EstatSelector;
+  unsigned long tempsPeriodes[8];
+  int NumeroCanals;
+};
+
+ParametresGenerals Parametres;
+
+// Clase Reproductor para encapsular el control completo del DFPlayer Mini
+//=======================================================================================================
+// CLASSE Reproductor
+// ------------------------------------------------------------------------------------------------------
+// Aquesta classe encapsula totes les operacions del DFPlayer Mini.
+// En lloc de cridar directament la llibreria DFRobotDFPlayerMini des de tot el programa,
+// es concentra aquí la lògica de reproduir, pausar, continuar, parar i ajustar volum.
+// Això fa que el programa principal sigui més net i fàcil de mantenir.
+//=======================================================================================================
+class Reproductor 
+{
+  private:
+    DFRobotDFPlayerMini *player;
+    bool inicializado;
+    int volumen;
+    int pista;
+    const int numCanciones = 4; // Número total de canciones disponibles
+
+  public:
+    // Constructor
+    Reproductor(HardwareSerial &serialPort)
+        : inicializado(false), volumen(20), pista(1) 
+    {
+      player = new DFRobotDFPlayerMini();
+
+      // Intentar inicializar el DFPlayer Mini
+      if (Serial && trace1) { Serial.println(F("Intentando inicializar DFPlayer Mini...")); }
+      if (!player->begin(serialPort)) {
+        Serial.println(F("Error al inicializar DFPlayer Mini. Verifique las conexiones y la tarjeta SD."));
+        inicializado = false;
+      } 
+      else 
+      {
+        if (Serial && trace1) {Serial.println(F("DFPlayer Mini inicializado correctamente."));}
+        inicializado = true;
+      }
+    }
+
+    // Métodos básicos
+    void reproducir(int nuevaPista) 
+    {
+      if (!inicializado || nuevaPista <= 0 || nuevaPista > numCanciones) {
+        if (Serial && trace1) {Serial.println(F("Reproductor no inicializado o pista fuera de rango."));}
+        return;
+      }
+      pista = nuevaPista;
+      player->play(pista);
+      if (Serial && trace2) 
+      {
+        Serial.print(F("Reproduciendo pista: "));
+        Serial.println(pista);
+      }
+    }
+
+    void ajustarVolumen(int nuevoVolumen) 
+    {
+      if (!inicializado || nuevoVolumen < 0 || nuevoVolumen > 30) {
+        Serial.println(F("Reproductor no inicializado o volumen fuera de rango."));
+        return;
+      }
+      volumen = nuevoVolumen;
+      player->volume(volumen);
+      if (Serial && trace1) 
+      {   
+        Serial.print(F("Volumen ajustado a: "));
+        Serial.println(volumen);
+      }
+    }
+
+    void pausar() 
+    {
+      if (!inicializado) return;
+      player->pause();
+      if (Serial && trace2) { Serial.println(F("Reproducción pausada.")); }
+    }
+
+    void reanudar() 
+    {
+      if (!inicializado) return;
+      player->start();
+      if (Serial && trace2) { Serial.println(F("Reproducción reanudada.")); }
+    }
+
+    void detener() 
+    {
+      if (!inicializado) return;
+      player->stop();
+      if (Serial && trace2) {Serial.println(F("Reproducción detenida.")); }
+    }
+
+    // Métodos de consulta
+
+    int getVolumen() 
+    {
+      return volumen;
+    }
+
+    bool estaInicializado() 
+    {
+      return inicializado;
+    }
+};
+
+// Iniciar el reproductor
+Reproductor *miReproductor;
+
+//=======================================================================================================
+// CLASSE CanalDMX
+// ------------------------------------------------------------------------------------------------------
+// Representa un canal DMX individual.
+// Cada objecte CanalDMX guarda:
+//   - número de canal DMX,
+//   - valor de cada escena,
+//   - valor actual que s'està enviant,
+//   - gradient de transició,
+//   - mode de transició per cada escena.
+//
+// Aquesta classe és clau perquè permet tractar cada canal com una unitat independent.
+//=======================================================================================================
+class CanalDMX 
+{
+  private:  
+  int canal;                  // Número del canal DMX
+  int valores[4];             // Valores de las escenas (máximo 4)
+  float valorActual;          // Valor actual del canal
+  float gradiente;            // Incremento o decremento por paso
+  int modos[4];               // Modo de transición
+
+  public:
+  CanalDMX() : canal(0), valorActual(0), gradiente(0.0) {
+    for (int i = 0; i < 4; i++) valores[i] = 0;
+    for (int i = 0; i < 4; i++) modos[i] = 0;
+  }
+
+  // Método para obtener todos los parámetros del canal en una estructura
+  ParametrosCanal obtenerParametros() 
+  {
+    ParametrosCanal parametros;
+
+    // Rellenar la estructura con los valores actuales del canal
+    parametros.canal = canal;
+    for (int i = 0; i < 4; i++) {
+        parametros.valores[i] = valores[i];
+        parametros.modos[i] = modos[i];
+    }
+    parametros.valorActual = valorActual;
+    return parametros;
+  }
+
+  void inicializar(int numCanal, int valorEscena1,int valorEscena2,int valorEscena3,int valorEscena4, 
+    int modosTrans1,int modosTrans2,int modosTrans3,int modosTrans4) 
+  {
+    canal = numCanal;
+    valores[0] = valorEscena1;
+    valores[1] = valorEscena2;
+    valores[2] = valorEscena3;
+    valores[3] = valorEscena4;
+    modos[0] = modosTrans1;
+    modos[1] = modosTrans2;
+    modos[2] = modosTrans3;
+    modos[3] = modosTrans4;
+    valorActual = valores[0];
+    gradiente = 0.0;
+    dmx_master.setChannelValue(canal, (int)valorActual);
+
+    if (Serial && trace2) 
+    {
+      Serial.print(F("Canal "));
+      Serial.print(canal);
+      Serial.print(F(": Inicializado con valores "));
+      for (int i = 0; i < 4; i++) {
+        Serial.print(valores[i]);
+        Serial.print(" (");
+        Serial.print(modos[i]);
+        if (i < 3) Serial.print(F("), "));
+      }
+      Serial.println(F(" "));
+    }
+  }
+
+  void guardarEnEEPROM(int canal, int direccionBase) 
+  {
+    CanalEEPROMData datos;
+    for (int i = 0; i < 4; i++) datos.valores[i] = valores[i];
+    for (int i = 0; i < 4; i++) datos.modos[i] = modos[i];
+
+    int direccion = direccionBase + (canal - 1) * sizeof(CanalEEPROMData);
+    EEPROM.put(direccion, datos);
+
+    if (Serial && trace1) 
+    {
+      // Debug: Mostrar los datos que se guardan
+      Serial.print(F("Canal "));
+      Serial.print(canal);
+      Serial.print(F(": Guardado en EEPROM en dirección "));
+      Serial.print(direccion);
+      Serial.print(F(" - Datos guardados: Valores = "));
+      for (int i = 0; i < 4; i++) {
+        Serial.print(valores[i]);
+        Serial.print(" (");
+        Serial.print(modos[i]);
+        if (i < 3) Serial.print(F("), "));
+      }
+      Serial.println(F(" "));
+
+    }
+  }
+
+  void cargarDeEEPROM(int canal, int direccionBase) 
+  {
+    CanalEEPROMData datos;
+    int direccion = direccionBase + (canal - 1) * sizeof(CanalEEPROMData);
+    EEPROM.get(direccion, datos);
+
+    for (int i = 0; i < 4; i++) valores[i] = datos.valores[i];
+    for (int i = 0; i < 4; i++) modos[i] = datos.modos[i];
+
+    if (Serial && trace2)
+    {
+      Serial.print(F("Canal "));
+      Serial.print(canal);
+      Serial.print(F(": Cargado desde EEPROM en dirección "));
+      Serial.print(direccion);
+
+      Serial.print(F(" - Datos recuperados: Valores = "));
+      for (int i = 0; i < 4; i++) {
+        Serial.print(valores[i]);
+        Serial.print(" (");
+        Serial.print(modos[i]);
+        if (i < 3) Serial.print(F("), "));
+      }
+      Serial.println(F(" "));
+    }
+  }
+
+  void inicializarDesdeEEPROM(int canalID, int direccionBase) 
+  {
+    CanalEEPROMData datos;
+    int direccion = direccionBase + (canalID - 1) * sizeof(CanalEEPROMData);
+    EEPROM.get(direccion, datos);
+
+    // Asignar valores cargados desde la EEPROM
+    canal = canalID;
+    for (int i = 0; i < 4; i++) {
+        valores[i] = datos.valores[i];
+        modos[i] = datos.modos[i];
+    }
+    // Configuración inicial
+    valorActual = valores[0];
+    gradiente = 0.0;
+    dmx_master.setChannelValue(canal, (int)valorActual);
+
+    if (Serial && trace2) 
+    {
+      // Debug: Mostrar los valores cargados y configurados
+      Serial.print(F("Canal "));
+      Serial.print(canal);
+      Serial.print(F(": Inicializado desde EEPROM con valores "));
+      for (int i = 0; i < 4; i++) {
+        Serial.print(valores[i]);
+        Serial.print(" (");
+        Serial.print(modos[i]);
+        if (i < 3) Serial.print(F("), "));
+      }
+      Serial.println(F(" "));
+
+    }
+  }
+
+  void actualizarCanalsFix(int &EstatActual) 
+  {
+    int origen = valores[EstatActual/2];
+    valorActual = origen;
+    dmx_master.setChannelValue(canal, (int)valorActual);
+  
+    if (Serial && trace2)
+    {
+      Serial.print("Temps : ");
+      Serial.print(tempsActualCicle / 1000);
+      Serial.print(" Canal ");
+      Serial.print(canal);
+      Serial.print(", actualitzarCanalsFix Estat: ");
+      Serial.print(EstatActual/2);
+      Serial.print(", Valor Actual: ");
+      Serial.println(valorActual);
+    } 
+  }
+
+  void actualizarCanalsTransicio(int &EstatActual , int Maxim) 
+  {
+
+    if (modos[EstatActual / 2] == 0)
+    {
+      int origen = valores[EstatActual / 2 % Maxim];
+      int destino = valores[(EstatActual / 2 + 1) % Maxim];
+      numeroPuntsTransicio = Temps[EstatActual] / tempsCiclesTransicio;
+      gradiente = (float)(destino - origen) / numeroPuntsTransicio;
+      valorActual = valorActual + gradiente;
+      dmx_master.setChannelValue(canal, (int)valorActual);
+
+      if (Serial && trace2)
+      {
+        Serial.print("Temps : ");
+        Serial.print(tempsActualCicle / 1000);
+        Serial.print(" Canal ");
+        Serial.print(canal);
+        Serial.print(", actualitzarCanalsTransicio Estat: ");
+        Serial.print(EstatActual);
+        Serial.print(", Valor Actual: ");
+        Serial.print(valorActual);
+        Serial.print(", origen: ");
+        Serial.print(origen);
+        Serial.print(", destino: ");
+        Serial.print(destino);
+        Serial.print(", gradiente: ");
+        Serial.print(gradiente);
+        Serial.print(", Maxim: ");
+        Serial.println(Maxim);
+      }
+
+    }
+    else
+    {
+      if (modos[EstatActual / 2] == 1) {
+        dmx_master.setChannelValue(canal, (int)valores[(EstatActual / 2 + 1) % 4]);
+      }
+    }
+
+  }
+
+  void enviarCanalEscena(int canalID, int escenaIndex) {
+    if (escenaIndex < 0 || escenaIndex >= 4) {
+      Serial.println(F("Índice de escena fuera de rango."));
+      return;
+    }
+
+    if (canalID != canal) {
+      Serial.println(F("Canal no coincide con este objeto."));
+      return;
+    }
+
+    int valorEscena = valores[escenaIndex];
+    dmx_master.setChannelValue(canal, valorEscena);
+
+      if (Serial && trace1) {
+      Serial.print(F("Enviado al DMX - Canal "));
+      Serial.print(canal);
+      Serial.print(F(", Escena "));
+      Serial.print(escenaIndex + 1);
+      Serial.print(F(": Valor = "));
+      Serial.println(valorEscena);
+    }
+  }
+
+  void guardarEnviarValor(int escenaIndex, int nuevoValor) {
+    if (escenaIndex < 0 || escenaIndex >= 4) {
+      Serial.println(F("Índice de escena fuera de rango."));
+      return;
+    }
+
+    if (nuevoValor < 0 || nuevoValor > 255) {
+      Serial.println(F("Valor fuera de rango (0-255)."));
+      return;
+    }
+
+    // Guardar el nuevo valor en la escena especificada
+    valores[escenaIndex] = nuevoValor;
+
+    // Guardar en la EEPROM
+    guardarEnEEPROM(canal, EEPROM_ADDR_CANALS);
+
+    // Enviar el valor actualizado al sistema DMX
+    dmx_master.setChannelValue(canal, (int)nuevoValor);
+
+
+
+  }
+
+    void guardarModo(int escenaIndex, int nuevoModo) {
+    if (escenaIndex < 0 || escenaIndex >= 4) {
+      Serial.println(F("Índice de escena fuera de rango."));
+      return;
+    }
+
+    if (nuevoModo < 0 || nuevoModo > 2) {
+      Serial.println(F("Valor fuera de rango (0-2)."));
+      return;
+    }
+
+    // Guardar el nuevo valor en la escena especificada
+    modos[escenaIndex] = nuevoModo;
+
+    // Guardar en la EEPROM
+    guardarEnEEPROM(canal, EEPROM_ADDR_CANALS);
+
+  }
+
+
+};
+
+CanalDMX canales[MAX_CANALS];
+
+//=======================================================================================================
+// SETUP
+// ------------------------------------------------------------------------------------------------------
+// Aquesta funció només s'executa una vegada quan l'Arduino arrenca o es reinicia.
+// Aquí es preparen tots els subsistemes:
+//   - LED d'estat
+//   - entrada de trigger
+//   - monitor sèrie de debug
+//   - sortida DMX
+//   - comunicació Bluetooth/Virtuino
+//   - reproductor MP3
+//   - càrrega de configuració des de l'EEPROM
+//   - aplicació de l'estat inicial segons el selector guardat
+//=======================================================================================================
+void setup() {
+
+  pinMode(ledPin1, OUTPUT);    // Configurar el pin del LED como salida
+
+  pinMode(pinTrigger, INPUT_PULLUP);  // abans era només INPUT
+
+  // Configurar el temporizador para activar cada 500 ms (500000 microsegundos)
+
+  Timer1.initialize(200000);              // 500000 microsegundos = 500 ms
+  Timer1.attachInterrupt(parpadearLED);   // Llamar a la función de parpadeo cada 500 ms
+
+  Serial.begin(9600);
+
+  if (Serial) {
+    Serial.println(F("========================================================"));
+    Serial.print(F("Programa="));
+    Serial.print(NomPrograma);
+    Serial.print(F(" Versió="));
+    Serial.println(VersioPrograma);
+    Serial.print(F("Numero Canals = "));
+    Serial.println(NUM_CANALS);
+    Serial.println(F("========================================================"));
+    Serial.println(F("Connectat el monitor Serial"));
+    Serial.println(F("--------------------------------------------------------"));
+  }
+
+  //----------------------------------------------------------------------------------------
+  // Inicialització DMX
+  //
+  dmx_master.enable ();
+
+  if (Serial) {
+    Serial.println(F("Habilitat DMX"));
+    Serial.println(F("--------------------------------------------------------"));
+  }
+    
+  //----------------------------------------------------------------------------------------
+  // Inicialitzar Virtuino
+
+  Serial1.begin(9600);  
+  Serial1.setTimeout(50);
+
+  //Start Virtuino. Set the buffer to 256. With this buffer Virtuino 
+  //can control about 28 pins (1 command = 9bytes) The T(text) commands with 20 characters need 20+6 bytes */
+  virtuino.begin(onReceived,onRequested,256); 
+
+  if (Serial) {
+    Serial.println(F("Habilitat Virtuino"));
+    Serial.println(F("--------------------------------------------------------"));
+  }
+
+  vDelay(4000);
+
+  // Crear el reproductor
+  Serial3.begin(9600); // Inicializar Serial3 para el DFPlayer Mini
+  miReproductor = new Reproductor(Serial3);
+
+  // Inicialitzar totes les variables del programa
+  InicialitzarPrograma();
+
+  //----------------------------------------------------------------------------------------
+  // Recuperem la posició del selector 
+
+  V[11] = Parametres.EstatSelector;
+  EstatSelector = Parametres.EstatSelector;
+
+  if (Serial && trace1) {
+    Serial.println(F("--------------------------------------------------------"));
+    Serial.println(F("Recuperem la posició del selector"));
+    Serial.print(F("Posició selector = "));
+    Serial.println(Parametres.EstatSelector);
+  }
+
+  virtuinoRun();                    // Necessary function to communicate with Virtuino. Client handler
+
+  Timer1.stop();                  // Stop Timer1
+  digitalWrite(ledPin1, HIGH);     // deixem ences el Led12
+
+  switch (EstatSelector) {
+    case 1: NouCicle(); break;
+    case 2: aplicarSelector(1); break;
+    case 3: aplicarSelector(1); break;
+    case 4: aplicarSelector(2); break;
+    case 5: aplicarSelector(4); break;
+    case 6: aplicarSelector(6); break;
+    case 7: RecuperarValorsCanals();
+    default: break;
+  }
+  
+  V[41] = 0;
+
+  if (Serial) {    
+    Serial.println(F("--------------------------------------------------------"));
+    Serial.print(F("Inici cos versio del programa = "));
+    Serial.println(VersioPrograma);
+    Serial.println(F("========================================================"));
+  }
+
+  if (text2 == " ") {text2 = VersioPrograma;}
+
+}
+
+//=======================================================================================================
+// LOOP PRINCIPAL
+// ------------------------------------------------------------------------------------------------------
+// Aquesta funció s'executa contínuament mentre l'Arduino està encès.
+// És el motor principal del programa. En cada volta:
+//   - processa comunicació amb Virtuino,
+//   - comprova canvis de volum, selector i configuració,
+//   - actualitza el cicle d'escenes,
+//   - executa transicions,
+//   - gestiona trigger extern,
+//   - gestiona pantalles de configuració.
+//=======================================================================================================
+void loop() {
+
+  virtuinoRun();
+
+  AjustVolum();
+
+  //----------------------------------------------------------------------------------------
+  // Preguntem si hem canviat el selector
+
+  if (V[11] != EstatSelector) 
+  { 
+    // S'ha canviat l'estat del selector
+    // Actualitzem l'estat del selector a la memoria
+
+    Parametres.EstatSelector = EstatSelector = V[11] ; 
+
+    V[10] = 0;
+
+    if (Serial && trace1) {
+      Serial.println(F(" "));
+      Serial.print(F("--------------------------------------------------------"));
+      Serial.println(F("--------------------------------------------------------"));
+      Serial.print(F("Selector = "));
+      Serial.println(EstatSelector); 
+    } 
+    
+    PararReproduccio();
+    guardarParametresEEPROM();
+
+    switch (EstatSelector) {
+      case 1: NouCicle(); break;
+      case 2: aplicarSelector(1); break;
+      case 3: aplicarSelector(1); break;
+      case 4: aplicarSelector(2); break;
+      case 5: aplicarSelector(4); break;
+      case 6: aplicarSelector(6); break;
+      case 7: RecuperarValorsCanals();
+      default: break;
+    }
+
+  }
+
+  //----------------------------------------------------------------------------------------
+  // Si selector es 1 i numero escenes es 1, posa el selector a valor 3 (Escena 1)
+
+  if (EstatSelector == 1 && NumeroEscenes == 1) 
+  {
+    V[11] = 3;
+
+    if (Serial && trace1) {
+      Serial.println(F("------------------"));
+      Serial.print(F("Selector = "));
+      Serial.println(EstatSelector); 
+      Serial.print(F("Numeros Escenes = "));
+      Serial.println(NumeroEscenes); 
+    }
+   
+  }  
+
+  //----------------------------------------------------------------------------------------
+  // Si selector es 1 i numero escenes es diferent a 1, valorem el canvi d'estat i la transició
+
+  if (EstatSelector == 1 && NumeroEscenes != 1)
+  {
+    tempsActualEstat = micros() - referenciaTempsEstat;
+    tempsActualCicle = micros() - referenciaTempsCicle;
+    tempsActualTransicio = micros() - referenciaTempsTransicio;
+    V[14]=tempsActualCicle/1000000;
+
+    for (int i = 0; i < 8; i++) {
+        if (tempsActualEstat >= Temps[i] && EstatActual == i) {
+            CanviEstat();
+        }
+    }
+
+    if (EstatActual % 2 == 1 && tempsActualTransicio >= tempsCiclesTransicio && NumeroEscenes != 1) 
+    {
+      tempsActualTransicio = 0; 
+      referenciaTempsTransicio = micros();
+      contadorPuntTransicio++;
+
+      if (contadorPuntTransicio <= numeroPuntsTransicio)
+      {
+        cridaTransicio();
+      }
+    }
+  }
+
+// ============================================================================================
+// EstatSelector == 2: Ejecutar un ciclo completo al detectar flanco de subida en D8
+
+if (EstatSelector == 2) {
+  bool triggerActual = digitalRead(pinTrigger);
+
+  // Detectar flanco de bajada y no estar ya en reproducción
+  if (!triggerActual && triggerAnterior && !cicloEnCurso) {
+    if (Serial && trace1) {
+      Serial.println(F("------------------"));
+      Serial.print(F("Selector = "));
+      Serial.print(EstatSelector);
+      Serial.println(F(" Reproducció d'un cicle solament "));
+    }
+    cicloEnCurso = true;
+    NouCicle();
+  }
+
+  // Guardar el estado actual del trigger para la próxima iteración
+  triggerAnterior = triggerActual;
+  
+    // Mientras dura el ciclo, hacer el mismo procesamiento que en el estado 1
+    if (cicloEnCurso) {
+        tempsActualEstat = micros() - referenciaTempsEstat;
+        tempsActualCicle = micros() - referenciaTempsCicle;
+        tempsActualTransicio = micros() - referenciaTempsTransicio;
+        V[14] = tempsActualCicle / 1000000;
+
+        for (int i = 0; i < 8; i++) {
+            if (tempsActualEstat >= Temps[i] && EstatActual == i) {
+                CanviEstat();
+            }
+        }
+
+        if (EstatActual % 2 == 1 && tempsActualTransicio >= tempsCiclesTransicio && NumeroEscenes != 1) {
+            tempsActualTransicio = 0;
+            referenciaTempsTransicio = micros();
+            contadorPuntTransicio++;
+
+            if (contadorPuntTransicio <= numeroPuntsTransicio) {
+                cridaTransicio();
+            }
+        }
+
+    }
+  }
+
+
+  //----------------------------------------------------------------------------------------
+  // Selector = 6 - Apartats de configuració
+
+  if (EstatSelector == 7) 
+  {
+      if (V[50]==3 && ( EstatPlay == "Play" || EstatPlay =="Pausa")) {PararReproduccio();}
+
+      if (V[50]==4) {ConfiguracioParametres();}
+
+      if (V[50]==1) {Cicle();}
+
+      if (V[50]==5 ) {Escenes();}
+
+      if (V[50]==8 ) {Escenes();}
+
+  }
+}
+
+//=================================================================================================
+//=================================================================================================
+//
+// Secció Rutines
+//
+//*************************************************************************************************
+
+// ======================================================================================================
+// Rutina: Iniciar la reproducció de un cicle nou
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ NouCicle
+// ------------------------------------------------------------------------------------------------------
+// Inicia un cicle complet d'il·luminació des del primer estat.
+// Abans de començar valida que la seqüència temporal sigui coherent.
+// Després posa tots els canals al valor de l'escena inicial, reinicia rellotges interns
+// i inicia la música seleccionada.
+//=======================================================================================================
+void NouCicle() 
+{
+  text1 = " ";
+  for (int i = 0; i < NumeroEscenes*2; i++) 
+  { 
+    if (verificarSequenciaTemps(i)) 
+    {
+      if (Serial && trace2) { Serial.println(F("Validación exitosa.")); }
+      text1 = " ";
+    } 
+    else 
+    {
+      text1 = "Error seqüencia";
+      if (Serial && trace2) {Serial.println(F("Error sequencia temporal"));}
+      return;
+    }
+  } 
+
+  EstatAntic = EstatActual;
+  EstatActual = 0;
+
+  if (Serial && trace1) {
+    if (EstatAntic != EstatActual) {
+      Serial.print(F("Temps : "));
+      Serial.print(tempsActualCicle / 1000);
+      Serial.print(F(" - Canvi d'estat de "));
+      Serial.print(EstatAntic);
+      Serial.print(F(" a "));
+      Serial.println(EstatActual);
+      Serial.println(F("Inici Nou Cicle"));
+      Serial.print(F("Temps : 0"));
+      Serial.print(F(" - Estat inicial =  "));
+      Serial.print(EstatActual);
+      Serial.print(F(" MusicaMP3 = "));
+      Serial.println(MusicaMP3);
+    } else {
+      Serial.println(F("Inici Nou Cicle"));
+      Serial.print(F("Temps : 0"));
+      Serial.print(F(" - Estat inicial =  "));
+      Serial.print(EstatActual);
+      Serial.print(F(" MusicaMP3 = "));
+      Serial.println(MusicaMP3);
+    }
+
+  }
+
+  for (int i = 0; i < NUM_CANALS; i++) {
+    canales[i].actualizarCanalsFix(EstatActual);
+  }
+
+  referenciaTempsCicle = referenciaTempsEstat = referenciaTempsTransicio = micros();
+  tempsActualCicle = tempsActualEstat = tempsActualTransicio = 0;
+  contadorPuntTransicio = 0;
+
+  V[10] = EstatActual + 1;
+
+  miReproductor->reproducir(MusicaMP3);
+
+
+}
+
+// ======================================================================================================
+// Rutina: Fer un canvi d'estat, reiniciant cicle si es l'ultim periode
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ CanviEstat
+// ------------------------------------------------------------------------------------------------------
+// Avança del període actual al següent.
+// Si arriba al final del cicle:
+//   - en mode automàtic reinicia el cicle,
+//   - en mode trigger finalitza i espera un nou impuls extern.
+// Si l'estat nou és parell, aplica directament una escena fixa.
+// Si l'estat nou és senar, prepara una transició gradual.
+//=======================================================================================================
+
+void CanviEstat() 
+{
+  
+  if (EstatActual == num_periodes - 1) 
+  {
+    if (EstatSelector == 1) 
+    {
+      // Mode automàtic: reiniciar directament el cicle
+      NouCicle();
+    } 
+    else if (EstatSelector == 2) 
+    {
+      // Mode manual: finalitzar el cicle i esperar un nou trigger
+      cicloEnCurso = false;
+
+      // Aturem la música
+      miReproductor->detener();
+
+      // Reiniciem l'estat del reproductor
+      EstatPlay = "Stop";
+      InstruccioMP3 = "STOP";
+      tempsPlayInici = millis();
+      tempsPlayAcumulat = 0;
+      tempsPlay = 0;
+
+      // Sincronitzem Virtuino
+      V[12] = 0;
+      V[13] = 0;
+      V[14] = 0;
+      V[10] = 0;
+
+      // Preparem el sistema per un nou cicle
+
+      EstatActual = 0;
+      EstatAntic = 0;
+      contadorPuntTransicio = 0;
+
+      // IMPORTANT:
+      // En acabar el cicle manual, deixem físicament els canals a l'escena 1,
+      // però sense cridar NouCicle(), perquè NouCicle() també engegaria música i rellotges.
+      for (int i = 0; i < NUM_CANALS; i++) 
+      {
+        canales[i].actualizarCanalsFix(EstatActual);
+      }
+      
+      tempsActualEstat = 0;
+      tempsActualCicle = 0;
+      tempsActualTransicio = 0;
+
+      referenciaTempsEstat = micros();
+      referenciaTempsCicle = micros();
+      referenciaTempsTransicio = micros();
+
+      // IMPORTANT: rearmem el trigger perquè no detecti un nou flanc immediat
+      triggerAnterior = digitalRead(pinTrigger);
+
+      if (Serial && trace1) {
+        Serial.println(F("Cicle complet finalitzat. Esperant nou flanc en D8."));
+      }
+    }
+
+    return;  // No continuar amb la resta de la funció
+  }
+
+  else 
+  {
+    EstatAntic = EstatActual;
+    EstatActual++;
+
+    referenciaTempsEstat = referenciaTempsTransicio = micros();
+    tempsActualEstat = tempsActualTransicio = 0;
+    contadorPuntTransicio = 0;
+
+    if (Serial && trace1)  
+    {
+      Serial.print(F("Temps : "));
+      Serial.print(tempsActualCicle / 1000);
+      Serial.print(F(" - Canvi d'estat de "));
+      Serial.print(EstatAntic);
+      Serial.print(F(" a "));
+      if (EstatActual % 2 == 1) 
+      {
+        Serial.print(EstatActual);
+        Serial.println(F(" (transició)"));
+        V[10] = EstatActual + 1;
+      } 
+      else 
+      {
+        V[10] = EstatActual + 1;
+        Serial.println(EstatActual);
+      }
+    }
+
+    if (EstatActual % 2 == 0) 
+    {
+      for (int i = 0; i < NUM_CANALS; i++) 
+      {
+        canales[i].actualizarCanalsFix(EstatActual);
+      }
+    }
+    else
+    {
+      numeroPuntsTransicio = Temps[EstatActual] / tempsCiclesTransicio;
+
+      if (Serial && trace2) 
+      {
+        Serial.print(F("numeroPuntsTransicio = "));
+        Serial.println(numeroPuntsTransicio);
+      }
+    }
+
+    tempsActualTransicio = 0; 
+    referenciaTempsTransicio = micros();
+  }
+}
+
+// ======================================================================================================
+// Rutina: Fer una transició de tots els canals
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ cridaTransicio
+// ------------------------------------------------------------------------------------------------------
+// Executa un pas de transició per a tots els canals actius.
+// Cada canal calcula el seu nou valor segons el valor d'origen, el valor de destí,
+// la durada de la transició i el mode configurat.
+//=======================================================================================================
+void cridaTransicio() 
+{
+
+  if (Serial && trace2) {
+    Serial.print("Temps : ");
+    Serial.print(tempsActualCicle / 1000);
+    Serial.print(" - Punt transició ");
+    Serial.print(contadorPuntTransicio);
+    Serial.print(" Estat: ");
+    Serial.println(EstatActual);
+  } 
+
+
+
+  for (int i = 0; i < NUM_CANALS; i++) 
+  {
+    canales[i].actualizarCanalsTransicio(EstatActual, num_periodes/2);
+  }
+}
+
+
+// ======================================================================================================
+// Rutina: Inicialitzar variables del programa
+// ------------------------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ InicialitzarPrograma
+// ------------------------------------------------------------------------------------------------------
+// Recupera la configuració permanent des de l'EEPROM i inicialitza l'estat intern.
+// Carrega nombre de canals, nombre d'escenes, música, volum, temps del cicle
+// i valors DMX de cada canal. També sincronitza aquests valors amb Virtuino.
+//=======================================================================================================
+void InicialitzarPrograma()
+{
+
+  if (Serial && trace1) {
+    Serial.println(F("-----------------------------------------------------------"));
+    Serial.println(F("Inicialitzar el programa"));
+    Serial.println(F("-----------------------------------------------------------"));
+  }
+  // Cargar parametres de l'EEPROM
+
+  cargarParametresEEPROM();
+
+  NUM_CANALS = constrain(Parametres.NumeroCanals, 1, MAX_CANALS);
+  V[40] = NUM_CANALS;
+  V[39] = MAX_CANALS;
+
+
+  V[18] = NumeroEscenes = Parametres.NumeroEscenes;
+
+  actualitzarEstatEscenes();
+
+  //----------------------------------------------------------------------------------------
+  // Recuperem el valor del volum guardat i l'apliquem
+  
+  V[16] = Parametres.NivellVolum;
+  NivellVolum = Parametres.NivellVolum;
+
+  if (Serial && trace1) {
+    Serial.println(F("Recuperem el valor del volum guardat i l'apliquem"));
+  }
+
+  miReproductor->ajustarVolumen(NivellVolum); // Ajustar el volumen
+
+  //----------------------------------------------------------------------------------------
+  // Recuperem el valor del numero de la canço a reproduir
+  
+  V[0] = Parametres.NumeroMusica;
+  MusicaMP3 = Parametres.NumeroMusica;
+
+  if (Serial && trace1) {
+    Serial.print(F("Recuperem el valor del numero de la canço a reproduir = "));
+    Serial.println(MusicaMP3);
+  }
+
+  //----------------------------------------------------------------------------------------
+  // Recuperem els valors de Temps guardats a la EEPROM
+
+  if (Serial && trace1) {
+    Serial.println(F("Recuperem els valors de Temps guardats a la EEPROM"));
+  }
+
+  for (int i = 0; i < 8; i++) 
+  {              
+    Temps[i] = Parametres.tempsPeriodes[i];
+  }
+  
+  tiempoTotalCiclo = 0;
+  
+  for (int i = 0; i < NumeroEscenes*2; i++)
+  {
+    tiempoTotalCiclo = tiempoTotalCiclo + Temps[i];
+  }
+
+  V[15] = tiempoTotalCiclo / 1000000;
+  Serial.print(F("V[15]="));
+  Serial.println(V[15]);
+
+  V[21] = TempsAcumulat[0] = Parametres.tempsPeriodes[0]/1000000;
+
+  for (int i = 1; i < 8; i++) 
+  {
+    V[i+21] = TempsAcumulat[i] = TempsAcumulat[i-1] + Parametres.tempsPeriodes[i]/1000000;
+  }
+
+  for (int i = 0; i < 8; i++) 
+  {
+    if (Serial && trace1) {
+      Serial.print(F("Temps "));
+      Serial.print(i);
+      Serial.print(F(" = "));
+      Serial.print(Temps[i]/1000000);
+      Serial.print(F(" V["));
+      Serial.print(i+21);
+      Serial.print(F("] = "));
+      Serial.print(V[i+21]);
+      Serial.print(F(" TempsAcumulat["));
+      Serial.print(i);
+      Serial.print(F("] = "));
+      Serial.println(TempsAcumulat[i]);
+    }
+  }
+
+
+
+
+  if (Serial && trace1) {
+    Serial.print(F("Total temps Cicle = "));
+    Serial.println(tiempoTotalCiclo / 1000000);
+    Serial.println(F("Temps iniciats"));
+  }
+
+  //----------------------------------------------------------------------------------------
+  // Inicialitzar tots els canals
+
+  inicializarCanales() ;
+
+  if (Serial && trace1) {
+    Serial.println(F("Canals iniciats"));
+  }
+
+  //----------------------------------------------------------------------------------------
+
+  V[9] = EscenaActiva = 1;
+  V[4] = Canal_1 = 1;
+  V[5] = Canal_2 = 2;
+  V[6] = Canal_3 = 3;
+
+  RecuperarValorsCanals() ;
+
+  if (Serial && trace1)
+  {
+    Serial.println(F("--------------------------------------------------------"));
+    Serial.println(F("Canals iniciats "));
+    Serial.print(F("Canals actius = "));
+    Serial.print(Canal_1);
+    Serial.print(F(" "));
+    Serial.print(Canal_2);
+    Serial.print(F(" "));
+    Serial.print(Canal_3);
+    Serial.print(F(" V[1]="));
+    Serial.print(V[1]);
+    Serial.print(F(" V[2]="));
+    Serial.print(V[2]);
+    Serial.print(F(" V[3]="));
+    Serial.print(V[3]);
+    Serial.print(F(" EscenaActiva="));
+    Serial.println(EscenaActiva);
+  }
+
+  V[12] = 0;
+  V[13] = 0;
+
+  V[41] = 0;
+  V[42] = 0;
+
+}
+
+// ======================================================================================================
+// Rutina Escenes: Gestio de escenes i els seus canals
+//
+//----------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ Escenes
+// ------------------------------------------------------------------------------------------------------
+// Gestiona la pantalla d'edició d'escenes de Virtuino.
+// Permet canviar d'escena activa, avançar o retrocedir grups de canals,
+// modificar valors DMX i canviar modes de transició.
+// Cada canvi important es desa a EEPROM automàticament.
+//=======================================================================================================
+void Escenes() 
+{
+  //----------------------------------------------------------------------------------------
+  // Canviar escena activa
+  //
+
+  if (V[35] != 0) 
+  {
+    V[9] = EscenaActiva + V[35];
+    if (V[9] < 1 ) V[9] = 1;
+    if (V[9] > 4 ) V[9] = 4;
+
+    EscenaActiva = V[9];
+    Parametres.EscenaActiva = EscenaActiva; // Manté la coherència interna [cite: 33]
+
+    RecuperarValorsCanals(); // Refresca els 3 canals del mòbil [cite: 221]
+    
+    // REFRESC TOTAL: Convertim Escena (1-4) a Estat (0, 2, 4, 6)
+    int estatCorrespondent = (EscenaActiva - 1) * 2;
+    aplicarSelector(estatCorrespondent); // <--- Aprofitem la teva rutina existent 
+  
+    V[35]=0;
+    return;
+  }
+  
+  /*if (V[35] != 0) 
+  {
+    
+    V[9] = EscenaActiva + V[35];
+
+    if (V[9] < 1 ) { V[9] = 1 ; }
+    if (V[9] > 4 ) { V[9] = 4 ; }
+
+    if (Serial && trace1)
+    {
+      Serial.println(F("--------------------------------------------------------"));
+      Serial.print(F("CanviarEscena de "));
+      Serial.print(EscenaActiva);
+      Serial.print(F(" a "));
+      Serial.println(V[9]);
+    }
+
+    EscenaActiva = V[9];
+
+    RecuperarValorsCanals();
+  
+
+    V[35]=0;
+     
+    return;
+
+  }*/
+
+  //----------------------------------------------------------------------------------------
+  // Canvis de canals (V7 = +/-1) 
+  //
+
+  if (V[7] != 0 )  
+  {
+    if (Canal_1 == 1 && V[7] == -1) { return; }
+    if (Canal_3 >= NUM_CANALS && V[7] == +1) {return;}    
+
+    Canal_1 = Canal_1 + 3*V[7];            
+    Canal_2 = Canal_2 + 3*V[7];
+    Canal_3 = Canal_3 + 3*V[7];
+    V[4] = Canal_1;
+    V[5] = Canal_2;
+    V[6] = Canal_3;
+
+    RecuperarValorsCanals();
+
+    if (Serial && trace1)
+      {
+        Serial.println(F("--------------------------------------------------------"));
+        Serial.print(F("Canals actius = "));
+        Serial.print(Canal_1);
+        Serial.print(F(" "));
+        Serial.print(Canal_2);
+        Serial.print(F(" "));
+        Serial.print(Canal_3);
+        Serial.print(F(" V[1]="));
+        Serial.print(V[1]);
+        Serial.print(F(" V[2]="));
+        Serial.print(V[2]);
+        Serial.print(F(" V[3]="));
+        Serial.print(V[3]);
+        Serial.print(F(" EscenaActiva="));
+        Serial.println(EscenaActiva);
+
+      }  
+
+    V[7] = 0;          // Posar l'interruptor de restar canals a 0 (V7=0)
+
+    return;
+  }
+
+  //----------------------------------------------------------------------------------------
+  // Si es varia el nivells dels canals
+  //
+
+  if (V[1] != parametrosCanales[Canal_1-1].valores[EscenaActiva-1]) 
+  {
+    parametrosCanales[Canal_1-1].valores[EscenaActiva-1] = V[1];
+    canales[Canal_1-1].guardarEnviarValor(EscenaActiva-1, V[1]);
+    return;
+  }
+
+  if (V[2] != parametrosCanales[Canal_2-1].valores[EscenaActiva-1]) 
+  {
+    parametrosCanales[Canal_2-1].valores[EscenaActiva-1] = V[2];
+    canales[Canal_2-1].guardarEnviarValor(EscenaActiva-1, V[2]);
+    return;
+  }
+
+  if (V[3] != parametrosCanales[Canal_3-1].valores[EscenaActiva-1]) 
+  {
+    parametrosCanales[Canal_3-1].valores[EscenaActiva-1] = V[3];
+    canales[Canal_3-1].guardarEnviarValor(EscenaActiva-1, V[3]);
+    return;
+  }
+
+
+  //----------------------------------------------------------------------------------------
+  // Si es varia els modes de transició dels canals
+  //
+
+  actualizarModo(Canal_1 - 1, EscenaActiva - 1, V[31]);
+  actualizarModo(Canal_2 - 1, EscenaActiva - 1, V[32]);
+  actualizarModo(Canal_3 - 1, EscenaActiva - 1, V[33]);
+
+}
+
+// ======================================================================================================
+// Rutina Verificar si s'ha canviat el mode dels 3 canals 
+//
+//=======================================================================================================
+// FUNCIÓ actualizarModo
+// ------------------------------------------------------------------------------------------------------
+// Comprova si ha canviat el mode de transició d'un canal i una escena.
+// Si ha canviat, actualitza la còpia en memòria i ho guarda a EEPROM.
+//=======================================================================================================
+void actualizarModo(int canal, int escena, int nuevoModo) {
+  if (parametrosCanales[canal].modos[escena] != nuevoModo) {
+    parametrosCanales[canal].modos[escena] = nuevoModo;
+    canales[canal].guardarModo(escena, nuevoModo);
+  }
+}
+
+// ======================================================================================================
+// Rutina Recuperar els valors dels 3 canals per l'escena activa 
+//
+//----------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ RecuperarValorsCanals
+// ------------------------------------------------------------------------------------------------------
+// Recupera els valors dels tres canals visibles a la pantalla de Virtuino
+// per a l'escena activa. També envia aquests valors al DMX perquè es vegin físicament.
+//=======================================================================================================
+void RecuperarValorsCanals() 
+{
+
+  V[1] = parametrosCanales[Canal_1-1].valores[EscenaActiva-1]; 
+  V[2] = parametrosCanales[Canal_2-1].valores[EscenaActiva-1]; 
+  V[3] = parametrosCanales[Canal_3-1].valores[EscenaActiva-1];
+
+  V[31] = parametrosCanales[Canal_1-1].modos[EscenaActiva-1];
+  V[32] = parametrosCanales[Canal_2-1].modos[EscenaActiva-1];
+  V[33] = parametrosCanales[Canal_3-1].modos[EscenaActiva-1];
+
+
+  canales[Canal_1-1].enviarCanalEscena(Canal_1, EscenaActiva-1);
+  canales[Canal_2-1].enviarCanalEscena(Canal_2, EscenaActiva-1);
+  canales[Canal_3-1].enviarCanalEscena(Canal_3, EscenaActiva-1);
+
+}
+
+// ======================================================================================================
+// Rutina Gravacio Intervals: Mira si ha canviat algun periode i el grava a la memoria 
+//
+//----------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ Cicle
+// ------------------------------------------------------------------------------------------------------
+// Agrupa la gestió dels intervals temporals i la gestió de la reproducció musical.
+// S'utilitza quan l'usuari està en la pantalla de configuració del cicle.
+//=======================================================================================================
+void Cicle() 
+{
+  GravacioIntervals () ;
+  GestioCicles();
+}
+
+// ======================================================================================================
+// Rutin: Gestió de la reproducció de la musica per tal de seleccionar els diferents moments de 
+// la musica
+// Mentre s'esta reproduint la musica es passa a les variables v13 i v14 el moment 
+// del temps de la reproducció
+//----------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ GestioCicles
+// ------------------------------------------------------------------------------------------------------
+// Interpreta els botons de Virtuino relacionats amb la música:
+//   - Play
+//   - Stop
+//   - Pausa
+//   - Continuar
+// També manté actualitzat el temps de reproducció.
+//=======================================================================================================
+void GestioCicles() 
+{ 
+
+  if (V[12] == 1 && EstatPlay == "Stop")  {       // PLAY: No estem reproduint i s'activa el botor de reproducció
+    IniciarReproduccio();
+  }
+
+  if (V[12] == 0 && ( EstatPlay == "Play" || EstatPlay =="Pausa"))  {   // STOP: Estem reproduint i es desactiva el botor de reproducció
+    PararReproduccio();
+  }
+
+  if (V[13] == 1 && EstatPlay == "Play")  {     // PAUSA: Estem reproduint i s'activa PAUSA el botor de reproducció
+    PausarReproduccio();
+  }
+  
+  if (V[12] == 1 && V[13] == 0 && EstatPlay == "Pausa" )  {    // CONTINUAR: Estem en pausa i tornem a reproduir (desativem pausa)
+    ContinuarReproduccio();
+  }
+
+  if (V[12] == 1 && EstatPlay == "Play")  {    // REPRODUINT: Estic reproduint i no estic en pausa, vaig acumulant temps de reproducció
+    Reproduint();
+  }
+}  
+
+// ======================================================================================================
+// Rutina: Reproduint 
+// ------------------------------------------------------------------------------------------------------
+
+//=======================================================================================================
+// FUNCIÓ Reproduint
+// ------------------------------------------------------------------------------------------------------
+// Calcula el temps que porta reproduint-se la música.
+// Si arriba al final del temps total del cicle, reinicia la reproducció.
+//=======================================================================================================
+void Reproduint()  
+{
+  text1 = "... reproduint ...";
+  tempsPlay = tempsPlayAcumulat + ( millis() - tempsPlayInici ) ;
+  V[14] = tempsPlay/1000;
+
+
+  if (NumeroEscenes == 1) { 
+      if ( V[14] >= V[21] ) { ReiniciarReproduccio(); }
+  }
+
+  if (NumeroEscenes == 2) { 
+     if ( V[14] >= V[24] )  { ReiniciarReproduccio(); } 
+  }
+
+  if (NumeroEscenes == 3) { 
+     if ( V[14] >= V[26] )  { ReiniciarReproduccio(); } 
+  }
+
+  if (NumeroEscenes == 4) { 
+     if ( V[14] >= V[28] )  { ReiniciarReproduccio(); } 
+  }
+
+} 
+
+// ======================================================================================================
+// Rutina: Parar reproducció MP3
+// ------------------------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ PararReproduccio
+// ------------------------------------------------------------------------------------------------------
+// Atura la música, reinicia els comptadors de reproducció i sincronitza Virtuino
+// perquè la pantalla mostri que el sistema està parat.
+//=======================================================================================================
+void PararReproduccio()  
+{
+    text1 = "  ";
+    EstatPlay = "Stop";             // posem l'estat de reproducció a off
+    tempsPlayInici = millis();      // guardem el temps actual 
+    tempsPlayAcumulat = 0;          // posem el temps acumulat a 0
+    tempsPlay = 0;                  // posem temps acumulat de reproducció a 0
+    V[12] = 0;                      // posem l'interruptor de reproduir a OFF
+    V[13] = 0;                      // posem l'iterruptor de Pausa a OFF (en teoria ja ho fa el codi virtuino)
+    //V[14] = tempsPlay;
+    V[14] = 0;
+    V[10] = 0;
+    cicloEnCurso = false;
+ 
+    InstruccioMP3 = "STOP" ;       // imprimeixo estats
+    
+    miReproductor->detener(); 
+    
+    if (Serial && trace1) {
+      Serial.print(F("----> "));
+      Serial.println(F("Parada reproducció "));
+      Serial.print(F("EstatPlay="));
+      Serial.print(EstatPlay);
+      Serial.print(F(" InstruccioMP3="));
+      Serial.println(InstruccioMP3);
+    }
+  
+}
+
+// ======================================================================================================
+// Rutina: Reiniciar reproducció 
+// ------------------------------------------------------------------------------------------------------
+
+//=======================================================================================================
+// FUNCIÓ ReiniciarReproduccio
+// ------------------------------------------------------------------------------------------------------
+// Atura la reproducció actual i la torna a iniciar des del principi.
+//=======================================================================================================
+void ReiniciarReproduccio()  
+{
+    PararReproduccio();
+ 
+    IniciarReproduccio();
+
+    if (Serial && trace1) {
+      Serial.print(F("Reinici reproducció V14 = "));
+      Serial.print(V[14]);
+      Serial.print(F(" Numero Escenes = "));
+      Serial.println(NumeroEscenes);
+    }
+}
+
+// ======================================================================================================
+// Rutina: Pausa reproducció
+// ------------------------------------------------------------------------------------------------------
+
+//=======================================================================================================
+// FUNCIÓ PausarReproduccio
+// ------------------------------------------------------------------------------------------------------
+// Posa la música en pausa i guarda el temps acumulat fins aquell moment.
+//=======================================================================================================
+void PausarReproduccio()  
+{
+  text1 = ">> Pausa <<";
+  EstatPlay = "Pausa";                      // tambe posem l'estat de pausa en off 
+  miReproductor->pausar();             // posem la reproducció en pausa 
+  tempsPlayAcumulat = tempsPlay ;   // Guardem el temps acumulat de la reporducció
+
+  InstruccioMP3 = "Pausa" ;         // imprimeixo estats
+  
+  if (Serial && trace1) {
+    Serial.print(F("EstatPlay="));
+    Serial.print(EstatPlay);
+    Serial.print(F(" InstruccioMP3="));
+    Serial.println(InstruccioMP3);
+  }
+}
+
+// ======================================================================================================
+// Rutina: Continuar reproducció despres de Pausa
+// ------------------------------------------------------------------------------------------------------
+
+//=======================================================================================================
+// FUNCIÓ ContinuarReproduccio
+// ------------------------------------------------------------------------------------------------------
+// Reprèn la música després d'una pausa i ajusta el comptador de temps.
+//=======================================================================================================
+void ContinuarReproduccio()  
+{
+  text1 = ">> reproduint <<";
+  EstatPlay = "Play";                      // tambe posem l'estat de pausa en off 
+  miReproductor->reanudar();
+  tempsPlayInici = millis() ;       // tornem a posar el temps de reproducció
+
+  InstruccioMP3 = "Continuar" ;         // imprimeixo estats
+  
+  if (Serial && trace1) {
+    Serial.print(F("EstatPlay="));
+    Serial.print(EstatPlay);
+    Serial.print(F(" InstruccioMP3="));
+    Serial.println(InstruccioMP3);
+  }
+}  
+
+// ======================================================================================================
+// Rutina: Iniciar reproducció
+// ------------------------------------------------------------------------------------------------------
+
+//=======================================================================================================
+// FUNCIÓ IniciarReproduccio
+// ------------------------------------------------------------------------------------------------------
+// Inicia la música seleccionada quan Virtuino activa el botó de reproducció.
+//=======================================================================================================
+void IniciarReproduccio() 
+{
+
+  if (V[12] != 0)   
+  {
+    text1 = ">> reproduint <<";
+
+    EstatPlay = "Play";             // activo estat de reproducció 
+    V[13] = 0;                      // posem l'iterruptor de Pausa a OFF (en teoria ja ho fa el codi virtuino)
+    tempsPlayInici = millis();      // guardem el temps actual 
+    tempsPlayAcumulat = 0;          // posem el temps acumulat a 0
+
+    miReproductor->reproducir(MusicaMP3);
+    
+    InstruccioMP3 = "PLAY" ;        // imprimeixo estats
+    
+    if (Serial && trace1) {
+      Serial.print(F("EstatPlay="));
+      Serial.print(EstatPlay);
+      Serial.print(F(" InstruccioMP3="));
+      Serial.println(InstruccioMP3);
+    } 
+  }  
+} 
+// ======================================================================================================
+// Rutina Gravacio Intervals: Mira si ha canviat algun periode i el grava a la memoria 
+//
+//----------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ GravacioIntervals
+// ------------------------------------------------------------------------------------------------------
+// Detecta canvis en els temps acumulats del cicle introduïts des de Virtuino.
+// Si la seqüència temporal és correcta, recalcula els intervals, actualitza el temps total
+// i guarda els nous valors a EEPROM.
+//=======================================================================================================
+void GravacioIntervals () 
+{
+
+  for (int i = 0; i < NumeroEscenes*2; i++) 
+  { 
+    if (V[i+21] != TempsAcumulat[i])
+    {
+
+      ajustarSequenciaPosteriors(i); 
+
+      if (verificarSequenciaTemps(i)) 
+      {
+        for (int j = 0; j < NumeroEscenes*2; j++) 
+        { 
+
+          if (j == 0) 
+          {
+            TempsAcumulat[j] = V[j+21];
+            Parametres.tempsPeriodes[j] = Temps[j] = TempsAcumulat[j]*1000000;
+          } 
+          else 
+          {
+            TempsAcumulat[j] = V[j+21];
+            Parametres.tempsPeriodes[j] = Temps[j] = (TempsAcumulat[j] - TempsAcumulat[j-1])*1000000;
+          }
+        }
+
+
+        text1 = " ";
+
+        tiempoTotalCiclo = 0;
+        
+        for (int i = 0; i < NumeroEscenes*2; i++) 
+        {
+          tiempoTotalCiclo = tiempoTotalCiclo + Temps[i];
+        }
+        V[15] = tiempoTotalCiclo / 1000000;
+        Serial.print(F("V[15]="));
+        Serial.println(V[15]);
+
+        if (Serial && trace1) {
+          Serial.println(F("--------------------------------------------------------"));
+          Serial.print(F("Modificació Temps_"));
+          Serial.print(i);
+          Serial.print(F(" = "));
+          Serial.print(TempsAcumulat[i]);
+          Serial.print(F(" V["));
+          Serial.print(i+21);
+          Serial.print(F("] = "));
+          Serial.print(V[i+21]);
+          Serial.print(F(" Temps Total = "));
+          Serial.println(V[15]);
+        }
+
+        guardarParametresEEPROM();
+
+      } 
+      else 
+      {
+        V[i+21] = TempsAcumulat[i];
+        text1 = "Error seqüencia";
+        if (Serial && trace1) {
+          Serial.println(F("Error sequencia temps"));
+        }
+      }
+    }
+  } 
+}
+
+// ======================================================================================================
+// Rutina Comprovació de seqüencia del cicle de temps
+//
+
+//=======================================================================================================
+// FUNCIÓ verificarSequenciaTemps
+// ------------------------------------------------------------------------------------------------------
+// Valida que els temps acumulats siguin coherents:
+//   - el primer temps ha de ser més gran que zero,
+//   - cada temps posterior ha de ser més gran que l'anterior.
+// Evita errors com períodes negatius o seqüències desordenades.
+//=======================================================================================================
+bool verificarSequenciaTemps(int m) 
+{
+  if (Serial && trace2) {
+    Serial.print(F("Verificando valores... "));
+    Serial.print(TempsAcumulat[m]);
+    Serial.print(F(" "));
+    Serial.println(V[m+21]);
+  }
+
+    if (V[21] <= 0) {
+      if (Serial && trace2) {
+        Serial.println(F("Error: El primer valor debe ser mayor que 0."));
+      }
+      return false;
+    }
+    else {
+      for (int x = 1; x < NumeroEscenes*2; x++) 
+      {
+        if (V[x+21] <= V[x+20]) {
+          if (Serial && trace2) {
+            Serial.print(F("Error: El valor en la posición "));
+            Serial.print(x);
+            Serial.println(F(" no es mayor que el anterior."));
+          }
+          return false;
+        }
+      }
+    }
+    if (Serial && trace2) {
+      Serial.println(F("Todos los valores son correctos."));
+    }
+    return true;
+}
+
+// ======================================================================================================
+// Rutina: Canvi numero escenes
+// ------------------------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ ajustarSequenciaPosteriors
+// ------------------------------------------------------------------------------------------------------
+// Quan l'usuari modifica un punt temporal intermedi, aquesta funció aplica la mateixa
+// diferència als punts posteriors. Així es conserva la durada relativa dels trams següents.
+//=======================================================================================================
+void ajustarSequenciaPosteriors(int i) {
+  long valorAnterior = TempsAcumulat[i];
+  long nuevoValor = V[i + 21];
+
+  long diferencia = nuevoValor - valorAnterior;
+
+  // Aplicamos la diferencia a todos los valores posteriores
+  for (int j = i + 1; j < NumeroEscenes * 2; j++) {
+    V[j + 21] += diferencia;
+  }
+}
+
+
+// ======================================================================================================
+// Rutina: Canvi numero escenes
+// ------------------------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ ConfiguracioParametres
+// ------------------------------------------------------------------------------------------------------
+// Gestiona els paràmetres generals del sistema des de Virtuino:
+//   - nombre d'escenes,
+//   - número de cançó MP3,
+//   - nombre de canals actius,
+//   - reset complet de dades guardades.
+//=======================================================================================================
+void ConfiguracioParametres()  
+{
+  //-----------------------------------------------------------------------------------
+  // Mirem si ha canviat el numero d'escenes
+
+  if (V[18] != NumeroEscenes )  
+  {  
+    // Es demana canviar el numero d'escenes
+    // Quan canviem el numero d'escenes reiniciem la escena activa 
+    
+    Parametres.EscenaActiva = 1;
+    Parametres.tempsPeriodes[0] = 5000000;
+    Parametres.tempsPeriodes[1] = 5000000;    
+    Parametres.tempsPeriodes[2] = 5000000;    
+    Parametres.tempsPeriodes[3] = 5000000;    
+    Parametres.tempsPeriodes[4] = 5000000;
+    Parametres.tempsPeriodes[5] = 5000000;
+    Parametres.tempsPeriodes[6] = 5000000;    
+    Parametres.tempsPeriodes[7] = 5000000;
+
+    NumeroEscenes = Parametres.NumeroEscenes = V[18];
+
+    actualitzarEstatEscenes();
+
+    guardarParametresEEPROM() ;
+
+    InicialitzarPrograma();
+    
+
+    tiempoTotalCiclo = 0;
+        
+    for (int i = 0; i < NumeroEscenes*2; i++) 
+    {
+      tiempoTotalCiclo = tiempoTotalCiclo + Temps[i];
+    }
+    V[15] = tiempoTotalCiclo / 1000000;
+    Serial.print(F("V[15]="));
+    Serial.println(V[15]);
+
+    if (Serial && trace1) {
+      Serial.println(F("--------------------------------------------------------"));
+      Serial.print(F("Canviar numero escenes a "));
+      Serial.println(NumeroEscenes);
+      Serial.print(F("Escena activa = "));
+      Serial.println(EscenaActiva);
+
+    }
+
+
+  }
+
+  //-----------------------------------------------------------------------------------
+  // Mirem si s'ha solicitat canviar el numero de la canço a reproduir
+
+  if (V[0] != MusicaMP3 )  
+  {  
+    // Es demana canviar el numero de la canço a reproduir
+
+    Parametres.NumeroMusica = MusicaMP3 = V[0];
+    guardarParametresEEPROM() ; 
+      // Crear el reproductor
+    Serial3.begin(9600); // Inicializar Serial3 para el DFPlayer Mini
+    miReproductor = new Reproductor(Serial3);
+
+    miReproductor->ajustarVolumen(NivellVolum); // Ajustar el volumen
+
+    if (Serial && trace1) {
+      Serial.println(F("--------------------------------------------------------"));
+      Serial.print(F("Numero canço a reproduir = "));
+      Serial.println(MusicaMP3);
+    }
+  }
+
+
+
+//-----------------------------------------------------------------------------------
+// Mirem si s'ha demanat modificar el nombre de canals i que sigui múltiple de 3
+int valorEntrada = (int)V[40];
+if (valorEntrada != NUM_CANALS) {
+
+    // Ens assegurem que sigui com a mínim 1 i com a màxim MAX_CANALS
+    valorEntrada = constrain(valorEntrada, 1, MAX_CANALS);
+
+    // Si no és múltiple de 3, el pugem al múltiple superior
+    if (valorEntrada % 3 != 0) {
+        valorEntrada = ((valorEntrada / 3) + 1) * 3;  // Ex: 37 -> 39
+        if (valorEntrada > MAX_CANALS) valorEntrada = MAX_CANALS; // Assegurar límit
+    }
+
+    Parametres.NumeroCanals = valorEntrada;
+    NUM_CANALS = valorEntrada;
+
+    V[40] = valorEntrada;  // Actualitzem també Virtuino per reflectir el valor corregit
+
+    guardarParametresEEPROM();
+    InicialitzarPrograma();
+
+    if (Serial && trace1) {
+        Serial.println(F("--------------------------------------------------------"));
+        Serial.print(F("Modificat número de canals a: "));
+        Serial.println(NUM_CANALS);
+    }
+}
+
+
+  //-----------------------------------------------------------------------------------
+  // Mirem si s'ha solicitat fer reset de totes les dades
+
+  if (V[41] == 1 & V[42] == 1 )   
+  {  
+
+    if (Serial && trace1) {
+      Serial.println(F("--------------------------------------------------------"));
+      Serial.println(F("Reset de les variables a la EEPROM"));
+    }
+
+    // Configuració inicial de parametres
+
+    Parametres.EscenaActiva = V[9] = 1;;
+    Parametres.NumeroEscenes = V[18] = 4;
+    Parametres.NumeroMusica = V[0] = 1;
+    Parametres.NivellVolum = V[16] = 15;
+    Parametres.tempsPeriodes[0] = V[21] = 5000000;
+    Parametres.tempsPeriodes[1] = V[22] = 5000000;    
+    Parametres.tempsPeriodes[2] = V[23] = 5000000;    
+    Parametres.tempsPeriodes[3] = V[24] = 5000000;    
+    Parametres.tempsPeriodes[4] = V[25] = 5000000;
+    Parametres.tempsPeriodes[5] = V[26] = 5000000;
+    Parametres.tempsPeriodes[6] = V[27] = 5000000;    
+    Parametres.tempsPeriodes[7] = V[28] = 5000000;
+
+    guardarParametresEEPROM();
+
+    for (int i = 0; i < MAX_CANALS; i++) 
+    {
+      canales[i].inicializar(i+1, 0, 0, 0, 0, 0, 0, 0, 0);
+      canales[i].guardarEnEEPROM(i+1, EEPROM_ADDR_CANALS); 
+      obtenirDadesCanal(i); 
+    }
+
+    InicialitzarPrograma();
+ 
+    V[41] = V[42] =0;    
+
+  }
+  
+}
+
+// ======================================================================================================
+// Rutina: Actualitzar estat d'escenes
+// ------------------------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ actualitzarEstatEscenes
+// ------------------------------------------------------------------------------------------------------
+// Sincronitza les variables internes relacionades amb escenes i calcula el nombre
+// de períodes del cicle. Cada escena genera dos períodes: escena fixa i transició.
+//=======================================================================================================
+  void actualitzarEstatEscenes()
+  {
+    V[18] = NumeroEscenes = Parametres.NumeroEscenes;
+
+    num_periodes = NumeroEscenes * 2;
+
+    EscenaActiva = Parametres.EscenaActiva;
+
+    if (Serial && trace1) {
+      Serial.print(F("Numero escenes = "));
+      Serial.println(NumeroEscenes);
+      Serial.print(F("Escena activa  = "));
+      Serial.println(EscenaActiva);
+    }
+  }
+
+
+// ======================================================================================================
+// Rutina: Ajust volum MP3
+// ------------------------------------------------------------------------------------------------------
+//=======================================================================================================
+// FUNCIÓ AjustVolum
+// ------------------------------------------------------------------------------------------------------
+// Detecta canvis de volum des de Virtuino, desa el nou valor a EEPROM
+// i l'aplica al DFPlayer Mini.
+//=======================================================================================================
+void AjustVolum()  
+{
+  if (V[16] != NivellVolum )  
+  {  
+
+    NivellVolum = Parametres.NivellVolum = V[16];
+
+    guardarParametresEEPROM();
+
+    miReproductor->ajustarVolumen(NivellVolum); // Ajustar el volumen
+
+    if (Serial && trace1) {
+      Serial.println(F("--------------------------------------------------------"));
+      Serial.print(F("Ajustar volum a "));
+      Serial.println(NivellVolum);
+    }
+  }
+}
+
+// ======================================================================================================
+// Rutina: Función de interrupción para el temporizador (ISR)
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ parpadearLED
+// ------------------------------------------------------------------------------------------------------
+// Rutina d'interrupció del Timer1. Inverteix l'estat del LED per fer-lo parpellejar.
+// S'utilitza durant l'arrencada com a indicador visual.
+//=======================================================================================================
+void parpadearLED() 
+{
+  int ledState1 = digitalRead(ledPin1);  // Leer el estado actual del LED
+  digitalWrite(ledPin1, !ledState1);     // Cambiar el estado del LED
+}
+
+// ======================================================================================================
+// Rutina: Cargar els parametres guardats a la EEPROM
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ cargarParametresEEPROM
+// ------------------------------------------------------------------------------------------------------
+// Llegeix de l'EEPROM l'estructura ParametresGenerals.
+// Això recupera l'última configuració guardada abans d'apagar el sistema.
+//=======================================================================================================
+void cargarParametresEEPROM() 
+{
+
+  EEPROM.get(EEPROM_ADDR_PARAMETRES, Parametres);
+  NUM_CANALS = constrain(Parametres.NumeroCanals, 1, MAX_CANALS); 
+
+  if (Serial && trace1) {
+    Serial.print(F("Lectura Parametres EEPROM - Escena Activa = "));
+    Serial.print(Parametres.EscenaActiva);
+    Serial.print(F(" Numero Escenes = "));
+    Serial.print(Parametres.NumeroEscenes);
+    Serial.print(F(" Numero Musica = "));
+    Serial.print(Parametres.NumeroMusica);
+    Serial.print(F(" Nivell Volum = "));
+    Serial.print(Parametres.NivellVolum);
+    Serial.print(F(" Selector = "));
+    Serial.println(Parametres.EstatSelector);
+    Serial.print(F("Temps T0 = "));
+    Serial.print(Parametres.tempsPeriodes[0]/1000000);
+    Serial.print(F(" T1 = "));
+    Serial.print(Parametres.tempsPeriodes[1]/1000000);
+    Serial.print(F(" T2 = "));
+    Serial.print(Parametres.tempsPeriodes[2]/1000000);
+    Serial.print(F(" T3 = "));
+    Serial.print(Parametres.tempsPeriodes[3]/1000000);
+    Serial.print(F(" T4 = "));
+    Serial.print(Parametres.tempsPeriodes[4]/1000000);
+    Serial.print(F(" T5 = "));
+    Serial.print(Parametres.tempsPeriodes[5]/1000000);
+    Serial.print(F(" T6 = "));
+    Serial.print(Parametres.tempsPeriodes[6]/1000000);
+    Serial.print(F(" T7 = "));
+    Serial.println(Parametres.tempsPeriodes[7]/1000000);
+    Serial.print(F(" Numero Canals = "));
+    Serial.println(Parametres.NumeroCanals);                        
+  }
+}
+
+// ======================================================================================================
+// Rutina: Guardar els parametres a la EEPROM
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ guardarParametresEEPROM
+// ------------------------------------------------------------------------------------------------------
+// Desa a EEPROM la configuració general actual.
+// S'utilitza quan canvia algun paràmetre permanent.
+//=======================================================================================================
+void guardarParametresEEPROM() 
+{
+    Parametres.NumeroCanals = NUM_CANALS;
+    EEPROM.put(EEPROM_ADDR_PARAMETRES, Parametres);
+
+    if (Serial && trace1) {
+      Serial.print(F("Guardar Parametres EEPROM - Escena Activa = "));
+      Serial.print(Parametres.EscenaActiva);
+      Serial.print(F(" Numero Escenes = "));
+      Serial.print(Parametres.NumeroEscenes);
+      Serial.print(F(" Numero Musica = "));
+      Serial.print(Parametres.NumeroMusica);
+      Serial.print(F(" Nivell Volum = "));
+      Serial.print(Parametres.NivellVolum);
+      Serial.print(F(" Selector = "));
+      Serial.println(Parametres.EstatSelector);
+      Serial.print(F("Temps T0 = "));
+      Serial.print(Parametres.tempsPeriodes[0]/1000000);
+      Serial.print(F(" T1 = "));
+      Serial.print(Parametres.tempsPeriodes[1]/1000000);
+      Serial.print(F(" T2 = "));
+      Serial.print(Parametres.tempsPeriodes[2]/1000000);
+      Serial.print(F(" T3 = "));
+      Serial.print(Parametres.tempsPeriodes[3]/1000000);
+      Serial.print(F(" T4 = "));
+      Serial.print(Parametres.tempsPeriodes[4]/1000000);
+      Serial.print(F(" T5 = "));
+      Serial.print(Parametres.tempsPeriodes[5]/1000000);
+      Serial.print(F(" T6 = "));
+      Serial.print(Parametres.tempsPeriodes[6]/1000000);
+      Serial.print(F(" T7 = "));
+      Serial.println(Parametres.tempsPeriodes[7]/1000000);  
+    }
+}
+
+// ======================================================================================================
+// Rutina: Obtenir les dades de un canal guardades a la EEPROM
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ obtenirDadesCanal
+// ------------------------------------------------------------------------------------------------------
+// Copia els paràmetres d'un objecte CanalDMX a l'array global parametrosCanales[].
+// Aquest array facilita mostrar i editar valors des de Virtuino.
+//=======================================================================================================
+void obtenirDadesCanal(int i)
+{
+    parametrosCanales[i] = canales[i].obtenerParametros();
+    // Imprimir los parámetros almacenados para verificar
+      if (Serial && trace2) 
+      {
+        Serial.print(F("Canal "));
+        Serial.print(parametrosCanales[i].canal);
+        Serial.print(F(": Valores: "));
+        for (int j = 0; j < 4; j++) {
+            Serial.print(parametrosCanales[i].valores[j]);
+            if (j < 3) Serial.print(F(", "));
+        }
+        Serial.print(F(" Modo: "));
+        Serial.print(parametrosCanales[i].modos[0]);
+        Serial.print(parametrosCanales[i].modos[1]);
+        Serial.print(parametrosCanales[i].modos[2]);
+        Serial.println(parametrosCanales[i].modos[3]);
+
+      }
+
+}
+
+// ======================================================================================================
+// Rutina: Inicialitzar tots els canals amb les dades guardades a la EEPROM
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ inicializarCanales
+// ------------------------------------------------------------------------------------------------------
+// Apaga tots els canals i després inicialitza cada canal actiu amb les dades guardades
+// a EEPROM.
+//=======================================================================================================
+void inicializarCanales() 
+{
+  apagarTotsElsCanals();
+  for (int i = 0; i < NUM_CANALS; i++) {
+  canales[i].inicializarDesdeEEPROM(i+1, EEPROM_ADDR_CANALS);
+  obtenirDadesCanal(i); 
+  } 
+}
+
+
+// ======================================================================================================
+// Rutina: Enviar a tots els canals els nivells DMX corresponents a l'estat indicat
+// ------------------------------------------------------------------------------------------------------
+//
+//=======================================================================================================
+// FUNCIÓ aplicarSelector
+// ------------------------------------------------------------------------------------------------------
+// Aplica directament un estat fix a tots els canals.
+// S'utilitza per mostrar una escena concreta sense executar el cicle complet.
+//=======================================================================================================
+void aplicarSelector(int estat) 
+{
+    for (int i = 0; i < NUM_CANALS; i++) {
+        canales[i].actualizarCanalsFix(estat);
+    }
+}
+
+//=======================================================================================================
+// FUNCIÓ apagarTotsElsCanals
+// ------------------------------------------------------------------------------------------------------
+// Envia valor 0 a tots els canals fins al màxim configurat.
+// Serveix com a apagada general preventiva abans d'inicialitzar o reconfigurar.
+//=======================================================================================================
+void apagarTotsElsCanals() {
+  for (int i = 0; i < MAX_CANALS; i++) {
+    dmx_master.setChannelValue(i + 1, 0);  // Els canals DMX van de 1 a N
+  }
+
+  if (Serial && trace1) {
+    Serial.println(F("Tots els canals DMX apagats."));
+  }
+}
+
+
+
+//=================================================================================================
+// Rutines VirtuinoCN ------------------------------------------------------------------------------------
+//============================================================== onCommandReceived
+//==============================================================
+/* This function is called every time Virtuino app sends a request to server to change a Pin value
+ * The 'variableType' can be a character like V, T, O  V=Virtual pin  T=Text Pin    O=PWM Pin 
+ * The 'variableIndex' is the pin number index of Virtuino app
+ * The 'valueAsText' is the value that has sent from the app   */
+
+//=======================================================================================================
+// FUNCIÓ onReceived
+// ------------------------------------------------------------------------------------------------------
+// Callback de Virtuino. S'executa quan l'app envia una dada cap a Arduino.
+// Si la dada és de tipus V, actualitza l'array V[].
+// També permet actualitzar textos especials als índexs 61, 62 i 63.
+//=======================================================================================================
+void onReceived(char variableType, uint8_t variableIndex, String valueAsText)
+{ 
+    if (variableType=='V'){
+        // float value = valueAsText.toFloat();        
+        if (variableIndex<V_memory_count) {
+             float value = valueAsText.toFloat();
+             V[variableIndex]=value;
+         }
+        else if (variableIndex==61) text1=valueAsText;
+        else if (variableIndex==62) text2=valueAsText;
+        else if (variableIndex==63) text3=valueAsText; 
+
+    }
+}
+//==============================================================
+/* This function is called every time Virtuino app requests to read a pin value*/
+//=======================================================================================================
+// FUNCIÓ onRequested
+// ------------------------------------------------------------------------------------------------------
+// Callback de Virtuino. S'executa quan l'app demana llegir una dada d'Arduino.
+// Retorna valors de l'array V[] o textos d'estat.
+//=======================================================================================================
+String onRequested(char variableType, uint8_t variableIndex)
+{    
+  if (variableType=='V') 
+  {
+    if (variableIndex<V_memory_count) return  String(V[variableIndex]);   // return the value of the arduino V memory array
+    else if (variableIndex==61) return text1;
+    else if (variableIndex==62) return text2;
+    else if (variableIndex==63) return text3;
+  }
+
+  return "";
+}
+
+//============================================================== virtuinoRun
+//=======================================================================================================
+// FUNCIÓ virtuinoRun
+// ------------------------------------------------------------------------------------------------------
+// Processa les comandes que arriben per Serial1 des del mòdul Bluetooth.
+// Quan detecta una comanda completa de Virtuino, genera la resposta i l'envia de tornada.
+// Cal cridar aquesta funció sovint perquè l'app respongui amb fluïdesa.
+//=======================================================================================================
+void virtuinoRun()
+{
+  while (Serial1.available()) 
+  {
+    char tempChar=Serial1.read();
+    if (tempChar==CM_START_CHAR) {               // a new command is starting...
+      virtuino.readBuffer=CM_START_CHAR;     // copy the new command to the virtuino readBuffer
+      virtuino.readBuffer+=Serial1.readStringUntil(CM_END_CHAR);
+      virtuino.readBuffer+=CM_END_CHAR;
+      if (debug) Serial.println("\nCommand= "+virtuino.readBuffer);
+      String* response= virtuino.getResponse();    // get the text that has to be sent to Virtuino as reply. The library will check the inptuBuffer and it will create the response text
+      if (debug) Serial.println("Response : "+*response);
+      Serial1.print(*response);
+      break; 
+    }
+  }
+}
+ 
+//============================================================== vDelay
+//=======================================================================================================
+// FUNCIÓ vDelay
+// ------------------------------------------------------------------------------------------------------
+// Delay no bloquejant per a Virtuino.
+// Mentre espera, continua cridant virtuinoRun(), evitant que la comunicació Bluetooth
+// quedi congelada durant l'espera.
+//=======================================================================================================
+void vDelay(int delayInMillis){long t=millis()+delayInMillis;while (millis()<t) virtuinoRun();}
+ 

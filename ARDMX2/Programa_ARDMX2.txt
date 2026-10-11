@@ -1,0 +1,374 @@
+//=======================================================================================================
+//-------------------------------------------------------------------------------------------------------
+//  Programa: ARDMX2_v1.0
+//  Titol: Controlador DMX Bluetooth per iluminació de Pessebres
+//  Autor: Xavier Mila Vidal
+//  Data: 01/2022
+//  Descripció:
+//    - Controladora Arduino de iluminacio de pessebres a traves del protocol DMX512. 
+//    - Configurat per controlar 300 canals pero pot arribar a 512.
+//    - Es base en un Arduino Mega i un controlador DMX CTC-DRA-10-R2
+//    - Per interctuar hi ha una pantalla LCD 20x4 amb interficie I2C
+//    - Utilitza una memoria EEPROM per conservar la ultima configuració quan perd la alimentació 
+//    - L'interecció es fa des de un mobil a traves de Bluetooth
+//    - La APP del mobil esta construida sobre el framework VIRTUINO
+//-------------------------------------------------------------------------------------------------------
+// 
+
+String NomPrograma = "ARDMX2_v1.0";
+int NumCanals = 300;                     // Numero de canals a gestionar (Max:512)
+
+//-------------------------------------------------------------------------------------------------------
+// Llibreria i sentencies de definició del DMX Shield MAX485 de CQRobot (CTC-DRA-10-R2)
+//
+// Llibreria Conceptinetics_RDM_alpha3_2.zip
+// https://sourceforge.net/projects/dmxlibraryforar/files/
+//
+// - Per ser compatibles les comunicacions serie d'aquest modul amb el de bluetooth s'ha de modificar 
+//     el fitxer Conceptinetics.h ubicat a ...\Documents\Arduino\libraries\Conceptinetics
+//     comentant la linia "#define USE_DMX_SERIAL_0" i descomentant la line "#define USE_DMX_SERIAL_2"
+// - Aixo fa que la comunicació de l'Arduino Mega cap al modul DMX surti pels pins RX17 i TX16    
+// - Els 2 pins RX17 i TX16 del Arduino Mega s'han de pontejar amb els pins digitals 3 i 4 del modul DMX  
+// - Els Jumpers [TX-io - TX-uart] i [RX-io - RX-uart]han de estar en posició TX-io i RX-io. Aixo fa  
+//   que el modul es comuniqui a traves dels pins digitals 3 (RX) i 4 (TX)  
+// - El Jumper [EN - /EN] ha d'estar a /EN per carregar el programa i a EN per executar el programa
+// - Com que volem que modul sigui el Master DMX, el Jumper [Slave - DE] ha de estar en DE 
+//
+
+#include <Conceptinetics.h>
+ 
+//
+
+
+#define DMX_MASTER_CHANNELS NumCanals   //Numero de canals que controlara el Master (<515)
+#define RXEN_PIN            2           //Pin que posa en lectura o escritura el modul
+
+// Configura el modul com a controlador MASTER DMX a traves del pin RXEN_PIN 
+// 
+DMX_Master        dmx_master ( DMX_MASTER_CHANNELS, RXEN_PIN );
+
+//-------------------------------------------------------------------------------------------------------
+//  Llibreries LCD 20 X 4 Con Luz De Fondo Azul Con Interfaz I2C
+
+#include <LiquidCrystal_I2C.h>         //Libreria para LCD I2C
+#include <Wire.h>                      //Libreria requrida para usar SDA y SCL
+LiquidCrystal_I2C lcd(0x27,20,4);      //Configuració de la pantalla de 4 linies i 20 caracters per linia
+
+//-------------------------------------------------------------------------------------------------------
+// Llibreria i sentencies de definició de l'interface Virtuino a traves de l'anten bluetooth 
+// Llibreria Virtuino 1.8.0
+// https://virtuino.com/downloads/virtuino.zip
+// web: https://virtuino.com/index.php
+//
+// La llibreria VirtuinoBluetooth.h s'ha de modificar aquesta sentencia 
+//    "#define BLUETOOTH_USE_SOFTWARE_SERIAL" comentant-la "//#define BLUETOOTH_USE_SOFTWARE_SERIAL"
+//    per tal de utilitzar el Serial Hardware
+
+#include <VirtuinoBluetooth.h>
+VirtuinoBluetooth virtuino(Serial1); 
+
+
+//-------------------------------------------------------------------------------------------------------
+//  Llibreria EEPROM per poder emmagatzemar els valors quan falti alimentació electrica
+
+#include <EEPROM.h>
+
+//-------------------------------------------------------------------------------------------------------
+// Definició de variables de treball
+//
+ int ContadorInici = 0;                              // Contador de reinici de programa
+ int Canal_1 = 1;                                    // Canal 1
+ int Canal_2 = 2;                                    // Canal 2
+ int Canal_3 = 3;                                    // Canal 3
+ int PIN_Reset = 8;                                  // PIN d'entrada de reset dels valors
+ int Nivell[512];                                    // Matriu de valors de nivell per cada canal (max. 512)
+ int NivellRebot = 5;                                // Nivell desestiment per rebot (mseg.)
+ int SWLED = 0;
+ int ContadorLED = 0;
+ int LED = 12;
+
+
+//========================================================================================
+//----------------------------------------------------------------------------------------
+// Inicialització del programa
+//
+void setup() {
+
+ pinMode(LED, OUTPUT);
+
+ digitalWrite(LED, HIGH);
+ 
+
+
+ lcd.init();               // Inicialitzar la LCD 20x4                       
+ lcd.backlight();          // Encent la llum de fondo
+ lcd.clear();              // Netejar la pantalla
+    
+ dmx_master.enable ();     // Habilita el DMX i inicia la transmisio   
+
+//----------------------------------------------------------------------------------------
+// Llegir tots els valors de nivell guardats a la EEPROM
+   
+   for (int i = 0; i < NumCanals + 1; i = i + 1) {              
+          Nivell[i] = EEPROM.read(i);
+          Escriure_LCD_Reinici_Programa();
+          
+          ContadorLED++;
+          
+          if (ContadorLED >= 5) {
+              if (SWLED == 0) {
+                digitalWrite(LED, HIGH);
+                SWLED = 1;
+                } else {  
+                digitalWrite(LED, LOW);
+                SWLED = 0; 
+                }
+              ContadorLED = 0;
+              }                      
+   }
+
+   Escriure_LCD_Reinici_Programa();
+   
+//----------------------------------------------------------------------------------------
+// Inicialitzar Virtuino
+ 
+   virtuino.DEBUG=true; 
+   Serial.begin(9600);
+   Serial1.begin(9600); 
+   
+   EscriureLCD () ;        // Escriure a la pantalla els valors dels canals 1,2 i 3 
+
+   virtuino.run(); 
+
+   virtuino.vMemoryWrite(4,Canal_1);
+   virtuino.vMemoryWrite(5,Canal_2);
+   virtuino.vMemoryWrite(6,Canal_3);
+
+   virtuino.vMemoryWrite(1,Nivell[Canal_1]);
+   virtuino.vMemoryWrite(2,Nivell[Canal_2]);
+   virtuino.vMemoryWrite(3,Nivell[Canal_3]);
+
+   EnviarDMX ();           // Enviar a DMX tots els nivells de cada canal recuperats de la EEPROM
+
+}
+
+//========================================================================================
+//----------------------------------------------------------------------------------------
+// Cos del programa
+//
+void loop() {
+
+digitalWrite(LED, LOW);
+   
+virtuino.run(); 
+
+//----------------------------------------------------------------------------------------
+// Es vol restar (de tres en tres) un canal (V7=1) al presionar el boto
+//
+
+if (virtuino.vMemoryRead(7) == 1 )  
+{
+   if (Canal_1 > 1) 
+   {   
+      Canal_1 = Canal_1 - 3;            // Restar 3 als canals actius
+      Canal_2 = Canal_2 - 3;
+      Canal_3 = Canal_3 - 3;
+                                        // Escriure els canals al mobil      
+      virtuino.vMemoryWrite(4,Canal_1);
+      virtuino.vMemoryWrite(5,Canal_2);
+      virtuino.vMemoryWrite(6,Canal_3);
+      virtuino.vMemoryWrite(1,Nivell[Canal_1]);
+      virtuino.vMemoryWrite(2,Nivell[Canal_2]);
+      virtuino.vMemoryWrite(3,Nivell[Canal_3]);
+ 
+      
+      EscriureLCD () ;                  // Escriure a la pantalla els valors dels canals
+      
+   }
+   virtuino.vMemoryWrite(7,0);          // Posar l'interruptor de restar canals a 0 (V7=0)
+}
+//virtuino.run(); 
+//----------------------------------------------------------------------------------------
+// Es vol sumar (de tres en tres) els canals (V8=1) al presionar el boto
+//
+if (virtuino.vMemoryRead(8) == 1 )
+{
+  if (Canal_1 < (NumCanals - 2) ) 
+  {
+     Canal_1 = Canal_1 + 3;            // Sumar 3 als canals actius
+     Canal_2 = Canal_2 + 3;
+     Canal_3 = Canal_3 + 3;
+                                       // Escriure els canals al mobil  
+     virtuino.vMemoryWrite(4,Canal_1);
+     virtuino.vMemoryWrite(5,Canal_2);
+     virtuino.vMemoryWrite(6,Canal_3);
+     virtuino.vMemoryWrite(1,Nivell[Canal_1]);
+     virtuino.vMemoryWrite(2,Nivell[Canal_2]);
+     virtuino.vMemoryWrite(3,Nivell[Canal_3]);
+
+      
+     EscriureLCD () ;                  // Escriure a la pantalla els valors dels canals
+   
+  }
+  virtuino.vMemoryWrite(8,0);          // Posar l'interruptor de sumar canals a 0 (V8=0)
+}
+//virtuino.run();  
+//----------------------------------------------------------------------------------------
+// Si es varia el nivell del Canal_1
+//
+if (virtuino.vMemoryRead(1) != Nivell[Canal_1]) 
+{
+   Nivell[Canal_1] = virtuino.vMemoryRead(1) ;
+   
+   EscriureLCD ();
+   
+   EEPROM.update(Canal_1,Nivell[Canal_1]);
+   
+   dmx_master.setChannelValue (Canal_1,Nivell[Canal_1]);
+   
+}
+//virtuino.run();  
+
+//----------------------------------------------------------------------------------------
+// Si es varia el nivell del Canal_2
+//
+if (virtuino.vMemoryRead(2) != Nivell[Canal_2]) 
+{
+   Nivell[Canal_2] = virtuino.vMemoryRead(2) ;
+
+   EscriureLCD ();
+   
+   EEPROM.update(Canal_2,Nivell[Canal_2]);
+   
+   dmx_master.setChannelValue (Canal_2,Nivell[Canal_2]);
+}
+//virtuino.run(); 
+ 
+//----------------------------------------------------------------------------------------
+// Si es varia el nivell del Canal_3
+//
+if (virtuino.vMemoryRead(3) != Nivell[Canal_3]) 
+{
+   Nivell[Canal_3] = virtuino.vMemoryRead(3) ;
+
+   EscriureLCD ();
+   
+   EEPROM.update(Canal_3,Nivell[Canal_3]);
+   
+   dmx_master.setChannelValue (Canal_3,Nivell[Canal_3]);
+}
+//virtuino.run(); 
+
+//----------------------------------------------------------------------------------------
+// Fer RESET de tots els valors
+//
+if (virtuino.vMemoryRead(10) == 1 ) {
+  if (virtuino.vMemoryRead(11) == 1 ) 
+   {
+   ResetValors();
+   Canal_1 = 1;            
+   Canal_2 = 2;
+   Canal_3 = 3;
+   virtuino.vMemoryWrite(4,Canal_1);
+   virtuino.vMemoryWrite(5,Canal_2);
+   virtuino.vMemoryWrite(6,Canal_3);
+   virtuino.vMemoryWrite(1,Nivell[Canal_1]);
+   virtuino.vMemoryWrite(2,Nivell[Canal_2]);
+   virtuino.vMemoryWrite(3,Nivell[Canal_3]);
+
+   virtuino.vMemoryWrite(10,0);
+   virtuino.vMemoryWrite(11,0);
+
+   EscriureLCD ();
+   
+   EnviarDMX ();           // Enviar a DMX tots els nivells de cada canal recuperats de la EEPROM
+   }
+}
+
+//virtuino.run(); 
+
+//delay ( 100);   
+     
+}
+
+// ======================================================================================================
+// RUTINES
+// ------------------------------------------------------------------------------------------------------
+// Rutina: Enviar tots els nivells al controlador DMX
+
+ void EnviarDMX()  {
+   for (int i = 0; i < NumCanals + 1; i = i + 1) {
+       dmx_master.setChannelValue (i, Nivell[i]);
+   }
+}
+
+// ------------------------------------------------------------------------------------------------------
+// Rutina: Fer reset de tots els nivells a 0
+
+ void ResetValors()  {
+   for (int i = 0; i < NumCanals + 1; i = i + 1) {
+       Nivell[i] = 0;
+   }
+   EscriureNivellMemoria ();
+   EscriureLCD (); 
+}
+
+// ------------------------------------------------------------------------------------------------------
+// Rutina: Escriure a memoria tots els valors de nivells dels canals
+
+ void EscriureNivellMemoria()  {
+   
+   for (int i = 0; i < NumCanals + 1; i = i + 1) {
+          EEPROM.write(i,Nivell[i]);
+   } 
+}
+
+// ------------------------------------------------------------------------------------------------------
+// Rutina: Escriure a la pantalla tots els valors del moment
+
+ void EscriureLCD()  {
+   // Linia 1
+   lcd.clear ();
+   lcd.setCursor(0, 0); 
+   lcd.print(NomPrograma);
+   lcd.setCursor(12, 0); 
+   lcd.print(NumCanals);  
+   // Linia 2
+   lcd.setCursor(2, 1);
+   lcd.print("P1 Canal=");
+   lcd.print(Canal_1);
+   lcd.setCursor(15, 1); 
+   lcd.print("N=");
+   lcd.print(Nivell[Canal_1]);
+   // Linia 3
+   lcd.setCursor(2, 2); 
+   lcd.print("P2 Canal=");
+   lcd.print(Canal_2);
+   lcd.setCursor(15, 2); 
+   lcd.print("N=");
+   lcd.print(Nivell[Canal_2]);
+   // Linia 4
+   lcd.setCursor(2, 3); 
+   lcd.print("P3 Canal=");
+   lcd.print(Canal_3);
+   lcd.setCursor(15, 3); 
+   lcd.print("N=");
+   lcd.print(Nivell[Canal_3]);               
+}
+
+// ------------------------------------------------------------------------------------------------------
+// Rutina: Escriure a la pantalla que s'esta reiniciant el programa 
+
+ void Escriure_LCD_Reinici_Programa()  {
+   // Linia 1
+   //lcd.clear ();
+   lcd.setCursor(0, 0); 
+   lcd.print(NomPrograma);
+   lcd.setCursor(12, 0); 
+   lcd.print(NumCanals);  
+   // Linia 3
+   lcd.setCursor(7, 2); 
+   lcd.print("---> "); 
+   lcd.print(ContadorInici); 
+   ContadorInici++ ;
+}
