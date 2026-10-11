@@ -28,6 +28,6 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
   [ardmx-evo-firmware](https://github.com/xaviermila-png/ardmx-evo-firmware),
   més una subcarpeta `Codi_font/` amb `src/`, `platformio.ini`, `partitions.csv`,
   `README.md` i `LICENSE` del mateix repositori, i un `LLEGEIX-ME.txt` propi (definit a l'script)
-  que explica les dues parts i quan fer servir `update_*.bat` (conserva la configuració)
-  o `install_*.bat` (instal·lació neta, l'esborra).
+  que explica les dues parts. **No** s'hi inclou `update_*.bat`: l'únic camí és `install_*.bat`,
+  que esborra tota la configuració i deixa el controlador de fàbrica.
   Quan surti una versió nova del firmware, cal tornar a generar el ZIP i actualitzar la versió d'aquesta taula.

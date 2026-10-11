@@ -8,6 +8,9 @@ Cada ZIP conté:
     partitions.csv, README.md, LICENSE),
   - un LLEGEIX-ME.txt generat aquí, que substitueix el de l'instal·lador.
 
+No s'hi inclou update_*.bat: l'únic camí d'instal·lació és install_*.bat,
+que esborra tota la configuració i deixa el controlador de fàbrica.
+
 Ús:
   python3 eines/genera_zip_firmware.py <ruta ardmx-one-firmware> <ruta ardmx-evo-firmware>
 """
@@ -63,34 +66,31 @@ Aquest ZIP conté dues coses:
 2. Connecta la placa ESP32 a l'ordinador amb un cable USB.
    El cable ha de ser de DADES, no només de càrrega.
 
-Tria quin fitxer has d'executar
--------------------------------
-A) ACTUALITZAR un ARDMX {nom} que ja funciona → update_ardmx_{fitxer}.bat
-   Només canvia el programa per la versió nova. La configuració desada
-   ({config})
-   es queda tal com està.
-   És l'opció recomanada per a un dispositiu que ja tens configurat.
+Molt important: la instal·lació ho esborra tot
+-----------------------------------------------
+L'instal·lador deixa el controlador com nou de fàbrica: instal·la el
+programa i ESBORRA TOTA la configuració desada
+({config}).
 
-B) INSTAL·LACIÓ NETA (placa nova o deixar-la com de fàbrica)
-   → install_ardmx_{fitxer}.bat
-   Instal·la el programa i ESBORRA TOTA la configuració desada
-   ({config}).
-   Si vols conservar-la, abans fes una EXPORTACIÓ des de la pantalla
-   "Configuració" de l'APP ARDMX (fitxer JSON). Després de la instal·lació
-   la pots IMPORTAR per recuperar {export}.
-   El nom Bluetooth i el PIN no s'exporten: els hauràs de tornar a posar
-   a mà si els havies canviat.
+Si vols conservar la configuració, ABANS d'instal·lar fes una EXPORTACIÓ
+des de la pantalla "Configuració" de l'APP ARDMX (fitxer JSON). Després
+de la instal·lació la pots IMPORTAR per recuperar {export}.
+El nom Bluetooth i el PIN no s'exporten: els hauràs de tornar a posar a
+mà si els havies canviat.
 
-Passos (iguals per a A i B)
----------------------------
-1. Fes doble clic al fitxer .bat que hagis triat.
+Passos
+------
+1. Fes doble clic a install_ardmx_{fitxer}.bat
 2. S'obre una finestra negra amb la versió que s'instal·larà i la llista
    de ports COM. Si detecta l'ESP32, en recomana un (per exemple "COM10"):
    prem Enter per fer-lo servir, o escriu un altre port i prem Enter.
-3. Llegeix l'avís i respon "s" per continuar.
+3. Llegeix l'avís que la configuració s'esborrarà i respon "s" per
+   continuar (o qualsevol altra tecla per cancel·lar).
 4. Espera unes desenes de segons. NO desendollis el cable mentre treballa.
-5. Al final ha de sortir "Firmware instal·lat correctament" (opció B) o
-   "Firmware actualitzat correctament" (opció A). Prem una tecla per tancar.
+5. Al final ha de sortir "Firmware instal·lat correctament".
+   Prem una tecla per tancar.
+6. Connecta't des de l'APP ARDMX i configura el controlador (o importa
+   la configuració que havies exportat).
 
 Si hi ha algun error
 --------------------
@@ -113,7 +113,6 @@ Codi font (carpeta Codi_font)
 
 Per compilar-lo: obre la carpeta Codi_font amb Visual Studio Code i
 l'extensió PlatformIO, i fes Build i Upload (detall al README.md).
-Pujar-lo des de PlatformIO no esborra la configuració desada.
 
 Més informació: https://lallumdelpessebre.cat
 """
@@ -137,7 +136,7 @@ def genera(nom: str, repo_fw: Path) -> Path:
     desti = REPO / "ARDMX" / f"{arrel}.zip"
     with zipfile.ZipFile(desti, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for f in sorted(inst.rglob("*")):
-            if f.is_file() and f.name != "LLEGEIX-ME.txt":
+            if f.is_file() and f.name != "LLEGEIX-ME.txt" and not f.name.startswith("update_"):
                 z.write(f, f"{arrel}/{f.relative_to(inst).as_posix()}")
         z.writestr(f"{arrel}/LLEGEIX-ME.txt", llegeix.encode("utf-8"))
         tar = subprocess.run(
