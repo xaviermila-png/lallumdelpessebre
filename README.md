@@ -19,6 +19,7 @@ Tots els botons "Descarregar" de la web apunten a aquest repositori.
 | [ARDMX4/Manual_ARDMX4.pdf](ARDMX4/Manual_ARDMX4.pdf) | Manual de funcionament de l'ARDMX4 | 2025 |
 | [ARDMX4/Arquitectura_ARDMX4.pdf](ARDMX4/Arquitectura_ARDMX4.pdf) | Document d'arquitectura de l'ARDMX4 | v1.0 |
 | [ARDMX4/Programa_ARDMX4.txt](ARDMX4/Programa_ARDMX4.txt) | Programa en C++ de l'ARDMX4 per a l'Arduino Mega 2560 | v4.13 |
+| [ARDMX4/APP_ARDMX_Classic.apk](ARDMX4/APP_ARDMX_Classic.apk) | App Android ARDMX Classic per controlar l'ARDMX4 (substitueix el muntatge amb Virtuino, ja obsolet) | 1.0.0.1 |
 
 ## ARDMX2 (2022)
 
